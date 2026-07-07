@@ -289,7 +289,12 @@ def write_df_sheet(wb, sheet_name, df, remark_col="Remark", status_col="Status")
     ws.auto_filter.ref = ws.dimensions
     ws.sheet_view.showGridLines = False
     for i, col in enumerate(df.columns, start=1):
-        width = max(12, min(30, int(df[col].astype(str).str.len().max() or 10) + 4))
+        if len(df):
+            max_len = df[col].astype(str).str.len().max()
+            max_len = 10 if pd.isna(max_len) else int(max_len)
+        else:
+            max_len = 10
+        width = max(12, min(30, max_len + 4))
         if col == "Zalora_Status":
             width = 16
         ws.column_dimensions[get_column_letter(i)].width = width
