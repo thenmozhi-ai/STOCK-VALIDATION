@@ -374,117 +374,159 @@ def build_workbook(marketplace_data: dict, warehouse_df: pd.DataFrame = None, br
     return wb
 
 
+def parse_product_master(file_bytes: bytes, filename: str) -> dict:
+    """Best-effort SKU -> Product Name lookup from a master product file.
+    Auto-detects a SKU-like column and a Name-like column by header keyword."""
+    try:
+        if filename.lower().endswith(".csv"):
+            df = pd.read_csv(io.BytesIO(file_bytes))
+        else:
+            df = pd.read_excel(io.BytesIO(file_bytes))
+    except Exception:
+        return {}
+
+    df.columns = [str(c).strip() for c in df.columns]
+    sku_col = next((c for c in df.columns if "sku" in c.lower()), None)
+    name_col = next((c for c in df.columns if "name" in c.lower() or "product" in c.lower()), None)
+    if not sku_col or not name_col:
+        return {}
+
+    df[sku_col] = df[sku_col].astype(str).str.strip()
+    return df.set_index(sku_col)[name_col].to_dict()
+
+
+def apply_product_names(df: pd.DataFrame, name_lookup: dict) -> pd.DataFrame:
+    if not name_lookup or "Seller SKU" not in df.columns:
+        return df
+    df = df.copy()
+    df["Product Name"] = df["Seller SKU"].map(name_lookup).fillna("—")
+    cols = list(df.columns)
+    cols.remove("Product Name")
+    insert_at = cols.index("Seller SKU") + 1
+    cols.insert(insert_at, "Product Name")
+    return df[cols]
+
+
 # ----------------------------------------------------------------------------
 # Streamlit UI
 # ----------------------------------------------------------------------------
 st.title("📊 Multi-Marketplace Stock Validation")
-st.caption("Lazada · Shopee · TikTok · Zalora — upload any subset of files, get one colour-coded workbook.")
-
-with st.expander("ℹ️ What files can I upload?", expanded=False):
-    st.markdown(
-        """
-- **StockValidation CSVs** — one per marketplace (filename should contain the marketplace name, e.g. `stockValidation-lazada.csv`)
-- **Lazada**: `pricestock...xlsx` (Stock & Price export)
-- **Shopee**: `mass_update_sales_info...xlsx`
-- **TikTok**: `Tiktoksellercenter_batchedit...xlsx`
-- **Zalora**: `SellerStockTemplate...xlsx` (+ optional `SellerStatusTemplate...xlsx`)
-- **Warehouse (optional)**: `SOHbySKU...xls` and `ALL...csv`
-
-Only upload the marketplaces you want validated — any subset works.
-        """
-    )
+st.caption("Lazada · Shopee · TikTok — upload each file into its named slot, get one colour-coded workbook.")
 
 brand_name = st.text_input("Brand / Shop name (shown on the summary tab)", value="My Shop")
 
-uploaded_files = st.file_uploader(
-    "Upload your files",
-    accept_multiple_files=True,
-    type=["csv", "xlsx", "xls"],
-)
+st.subheader("1. Marketplace stock files")
+mp_col1, mp_col2, mp_col3 = st.columns(3)
+with mp_col1:
+    lazada_mp_file = st.file_uploader("Lazada MP file", type=["xlsx"], key="lazada_mp")
+with mp_col2:
+    shopee_mp_file = st.file_uploader("Shopee MP file", type=["xlsx"], key="shopee_mp")
+with mp_col3:
+    tiktok_mp_file = st.file_uploader("Tiktok MP file", type=["xlsx"], key="tiktok_mp")
 
-if uploaded_files:
-    detected = []
-    buckets = {"stock_validation": {}, "stock_price": None, "mass_update": None,
-               "batch_edit": None, "stock_file": None, "status_file": None,
-               "soh": None, "all_report": None}
+st.subheader("2. Inventory / StockValidation files")
+inv_col1, inv_col2, inv_col3 = st.columns(3)
+with inv_col1:
+    lazada_inv_file = st.file_uploader("Lazada inventory file", type=["csv"], key="lazada_inv")
+with inv_col2:
+    tc_shopee_inv_file = st.file_uploader("TC Shopee inventory file", type=["csv"], key="tc_shopee_inv")
+with inv_col3:
+    tiktok_inv_file = st.file_uploader("Tiktok inventory file", type=["csv"], key="tiktok_inv")
 
-    for f in uploaded_files:
-        mp, role = classify_file(f.name)
-        detected.append((f.name, mp, role))
-        content = f.read()
-        if role == "stock_validation":
-            buckets["stock_validation"][mp] = parse_stock_validation_csv(content)
-        elif role == "stock_price":
-            buckets["stock_price"] = content
-        elif role == "mass_update":
-            buckets["mass_update"] = content
-        elif role == "batch_edit":
-            buckets["batch_edit"] = content
-        elif role == "stock_file":
-            buckets["stock_file"] = content
-        elif role == "status_file":
-            buckets["status_file"] = content
-        elif role == "soh":
-            buckets["soh"] = content
-        elif role == "all_report":
-            buckets["all_report"] = content
+st.subheader("3. Warehouse & reference (optional)")
+wh_col1, wh_col2 = st.columns(2)
+with wh_col1:
+    soh_file = st.file_uploader("SOH", type=["xls"], key="soh")
+with wh_col2:
+    product_master_file = st.file_uploader("Product Master file", type=["csv", "xlsx"], key="product_master")
 
-    st.subheader("Detected files")
-    det_df = pd.DataFrame(detected, columns=["Filename", "Marketplace", "Role"])
-    st.dataframe(det_df, use_container_width=True, hide_index=True)
+with st.expander("ℹ️ Notes on file formats", expanded=False):
+    st.markdown(
+        """
+- **Lazada MP file** — the `pricestock...xlsx` Stock & Price export
+- **Shopee MP file** — the `mass_update_sales_info...xlsx` export
+- **Tiktok MP file** — the `Tiktoksellercenter_batchedit...xlsx` export
+- **Lazada / TC Shopee / Tiktok inventory file** — the StockValidation CSV for that marketplace
+  (`Seller SKU` + `Expected Stock` columns)
+- **SOH** — `SOHbySKU...xls` warehouse export (optional Step 1 check — needs an ALL report too, see below)
+- **Product Master file** — any file with a SKU column and a Name column; used only to add a
+  `Product Name` column to the report, doesn't affect matching
 
-    unclassified = det_df[det_df["Marketplace"].isna()]
-    if len(unclassified):
-        st.warning(
-            "Some files could not be auto-classified and were ignored: "
-            + ", ".join(unclassified["Filename"].tolist())
-        )
+Only fill in the marketplaces you want validated — any subset works.
+        """
+    )
+
+any_uploaded = any([
+    lazada_mp_file, shopee_mp_file, tiktok_mp_file,
+    lazada_inv_file, tc_shopee_inv_file, tiktok_inv_file,
+    soh_file, product_master_file,
+])
+
+if any_uploaded:
+    name_lookup = {}
+    if product_master_file:
+        name_lookup = parse_product_master(product_master_file.read(), product_master_file.name)
+        if name_lookup:
+            st.success(f"Product Master loaded — {len(name_lookup)} SKUs mapped to product names.")
+        else:
+            st.warning("Product Master file uploaded but no SKU/Name columns could be detected — skipping.")
 
     if st.button("🚀 Run Validation", type="primary"):
         marketplace_data = {}
 
-        if "Lazada" in buckets["stock_validation"] and buckets["stock_price"]:
-            sp_lookup = parse_lazada_stock_price(buckets["stock_price"])
-            marketplace_data["Lazada"] = build_marketplace_df(
-                buckets["stock_validation"]["Lazada"], sp_lookup, "Lazada")
+        if lazada_inv_file and lazada_mp_file:
+            stockval_df = parse_stock_validation_csv(lazada_inv_file.read())
+            sp_lookup = parse_lazada_stock_price(lazada_mp_file.read())
+            df = build_marketplace_df(stockval_df, sp_lookup, "Lazada")
+            marketplace_data["Lazada"] = apply_product_names(df, name_lookup)
 
-        if "Shopee" in buckets["stock_validation"] and buckets["mass_update"]:
-            sp_lookup = parse_shopee_mass_update(buckets["mass_update"])
-            marketplace_data["Shopee"] = build_marketplace_df(
-                buckets["stock_validation"]["Shopee"], sp_lookup, "Shopee")
+        if tc_shopee_inv_file and shopee_mp_file:
+            stockval_df = parse_stock_validation_csv(tc_shopee_inv_file.read())
+            sp_lookup = parse_shopee_mass_update(shopee_mp_file.read())
+            df = build_marketplace_df(stockval_df, sp_lookup, "Shopee")
+            marketplace_data["Shopee"] = apply_product_names(df, name_lookup)
 
-        if "TikTok" in buckets["stock_validation"] and buckets["batch_edit"]:
-            sp_lookup = parse_tiktok_batch_edit(buckets["batch_edit"])
-            marketplace_data["TikTok"] = build_marketplace_df(
-                buckets["stock_validation"]["TikTok"], sp_lookup, "TikTok")
-
-        if "Zalora" in buckets["stock_validation"] and buckets["stock_file"]:
-            sp_lookup = parse_zalora_stock_file(buckets["stock_file"])
-            status_lookup = parse_zalora_status_file(buckets["status_file"]) if buckets["status_file"] else None
-            marketplace_data["Zalora"] = build_marketplace_df(
-                buckets["stock_validation"]["Zalora"], sp_lookup, "Zalora", status_lookup)
+        if tiktok_inv_file and tiktok_mp_file:
+            stockval_df = parse_stock_validation_csv(tiktok_inv_file.read())
+            sp_lookup = parse_tiktok_batch_edit(tiktok_mp_file.read())
+            df = build_marketplace_df(stockval_df, sp_lookup, "TikTok")
+            marketplace_data["TikTok"] = apply_product_names(df, name_lookup)
 
         warehouse_df = None
-        if buckets["soh"] and buckets["all_report"]:
-            soh_lookup = parse_soh(buckets["soh"])
-            all_lookup = parse_all_report(buckets["all_report"])
-            rows = []
-            all_skus = set(soh_lookup) | set(all_lookup)
-            for sku in all_skus:
-                exp = soh_lookup.get(sku)
-                act = all_lookup.get(sku)
-                if exp is None:
-                    continue
-                status, remark = get_status_remark(exp, act, "NOT FOUND")
-                rows.append({"Seller SKU": sku, "Expected Stock": exp, "SP_Quantity": act,
-                             "Status": status, "Remark": remark})
+        if soh_file:
+            soh_lookup = parse_soh(soh_file.read())
+            rows = [
+                {"Seller SKU": sku, "Expected Stock": qty, "SP_Quantity": None,
+                 "Status": "Mismatch", "Remark": "NOT FOUND"}
+                for sku, qty in soh_lookup.items()
+            ]
             if rows:
-                warehouse_df = pd.DataFrame(rows)
+                warehouse_df = apply_product_names(pd.DataFrame(rows), name_lookup)
+                st.info(
+                    "SOH file loaded without an ALL report — showing warehouse stock as reference only "
+                    "(no live-marketplace comparison available for this tab)."
+                )
+
+        missing_pairs = []
+        if lazada_mp_file and not lazada_inv_file:
+            missing_pairs.append("Lazada MP file uploaded without its inventory file")
+        if lazada_inv_file and not lazada_mp_file:
+            missing_pairs.append("Lazada inventory file uploaded without its MP file")
+        if shopee_mp_file and not tc_shopee_inv_file:
+            missing_pairs.append("Shopee MP file uploaded without its inventory file")
+        if tc_shopee_inv_file and not shopee_mp_file:
+            missing_pairs.append("TC Shopee inventory file uploaded without its MP file")
+        if tiktok_mp_file and not tiktok_inv_file:
+            missing_pairs.append("Tiktok MP file uploaded without its inventory file")
+        if tiktok_inv_file and not tiktok_mp_file:
+            missing_pairs.append("Tiktok inventory file uploaded without its MP file")
+        if missing_pairs:
+            st.warning("Skipped incomplete pairs: " + "; ".join(missing_pairs))
 
         if not marketplace_data and warehouse_df is None:
             st.error(
-                "No complete marketplace pair was found (need both a StockValidation CSV "
-                "AND the matching stock file for at least one marketplace)."
+                "No complete marketplace pair was found. Each marketplace needs BOTH its "
+                "MP file AND its inventory file uploaded."
             )
         else:
             wb = build_workbook(marketplace_data, warehouse_df, brand_name)
@@ -496,11 +538,12 @@ if uploaded_files:
             filename = f"Stock_Validation_{suffix}_{datetime.now().strftime('%Y%m%d')}.xlsx"
 
             st.success("Validation complete!")
-            cols = st.columns(len(marketplace_data) or 1)
-            for i, (mp, df) in enumerate(marketplace_data.items()):
-                with cols[i]:
-                    mismatches = (df["Status"] == "Mismatch").sum()
-                    st.metric(f"{mp} mismatches", int(mismatches), delta=None)
+            if marketplace_data:
+                cols = st.columns(len(marketplace_data))
+                for i, (mp, df) in enumerate(marketplace_data.items()):
+                    with cols[i]:
+                        mismatches = (df["Status"] == "Mismatch").sum()
+                        st.metric(f"{mp} mismatches", int(mismatches), delta=None)
 
             st.download_button(
                 "⬇️ Download Excel Report",
@@ -509,4 +552,4 @@ if uploaded_files:
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             )
 else:
-    st.info("Upload StockValidation CSVs plus the matching marketplace stock files to begin.")
+    st.info("Upload each marketplace's MP file + inventory file into the matching slot above to begin.")
