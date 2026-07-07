@@ -44,7 +44,7 @@ NOT_FOUND_LABELS = {
     "TikTok": "NOT IN TIKTOK",
     "Zalora": "NOT IN ZALORA",
     "Shopify": "NOT IN SHOPIFY",
-    "DTC": "NOT IN SHOPIFY (DTC)",
+    "DTC": "NOT IN WAREHOUSE",
 }
 
 MARKETPLACE_ORDER = ["Lazada", "Shopee", "TikTok", "Zalora", "Shopify", "DTC"]
@@ -643,9 +643,9 @@ with row2[1]:
 with row2[2]:
     with st.container(border=True):
         mp_card_header("DTC")
-        st.caption("Compares against the Shopify MP file uploaded above — no separate MP file needed here.")
+        st.caption("Compares against the SOH warehouse file below — no separate MP file needed here.")
         dtc_inv_file = st.file_uploader("DTC inventory file", type=["csv"], key="dtc_inv")
-        readiness_line(shopify_mp_file, dtc_inv_file)
+        dtc_readiness_slot = st.empty()
 
 st.markdown("### 2️⃣ Warehouse & reference (optional)")
 with st.container(border=True):
@@ -660,6 +660,9 @@ with st.container(border=True):
         mp_report_file = st.file_uploader("MP Report file", type=["csv", "xlsx"], key="mp_report")
         st.caption("Checked against Product Master by SKU — needs Product Master uploaded too.")
 
+with dtc_readiness_slot:
+    readiness_line(soh_file, dtc_inv_file)
+
 with st.expander("ℹ️ Notes on file formats", expanded=False):
     st.markdown(
         """
@@ -669,7 +672,7 @@ with st.expander("ℹ️ Notes on file formats", expanded=False):
 - **Zalora MP file** — `SellerStockTemplate...xlsx`; optional Status file adds an active/inactive column
 - **Shopify MP file** — the standard Shopify "Export inventory" CSV (`SKU` + `Available` columns)
 - **DTC inventory file** — StockValidation-style CSV for your own DTC site; validated against the
-  Shopify MP file's stock (upload that too)
+  SOH warehouse file (upload that too)
 - **Inventory files** — the StockValidation CSV for that marketplace (`Seller SKU` + `Expected Stock` columns)
 - **SOH** — `SOHbySKU...xls` warehouse export (shown as reference only in this version)
 - **Product Master file** — any file with a SKU column and a Name column; adds a `Product Name`
@@ -735,16 +738,19 @@ if any_uploaded:
             df = build_marketplace_df(stockval_df, shopify_sp_lookup, "Shopify")
             marketplace_data["Shopify"] = apply_product_names(df, name_lookup)
 
-        if dtc_inv_file and shopify_sp_lookup:
-            stockval_df = parse_stock_validation_csv(dtc_inv_file.read())
-            df = build_marketplace_df(stockval_df, shopify_sp_lookup, "DTC")
-            marketplace_data["DTC"] = apply_product_names(df, name_lookup)
-        elif dtc_inv_file and not shopify_mp_file:
-            st.warning("DTC inventory file uploaded, but the Shopify MP file is needed to validate against — skipping DTC.")
-
-        warehouse_df = None
+        soh_lookup = None
         if soh_file:
             soh_lookup = parse_soh(soh_file.read())
+
+        if dtc_inv_file and soh_lookup:
+            stockval_df = parse_stock_validation_csv(dtc_inv_file.read())
+            df = build_marketplace_df(stockval_df, soh_lookup, "DTC")
+            marketplace_data["DTC"] = apply_product_names(df, name_lookup)
+        elif dtc_inv_file and not soh_file:
+            st.warning("DTC inventory file uploaded, but the SOH warehouse file is needed to validate against — skipping DTC.")
+
+        warehouse_df = None
+        if soh_lookup:
             rows = [
                 {"Seller SKU": sku, "Expected Stock": qty, "SP_Quantity": None,
                  "Status": "Mismatch", "Remark": "NOT FOUND"}
@@ -786,7 +792,7 @@ if any_uploaded:
         if not marketplace_data and warehouse_df is None and mp_vs_pm_df is None:
             st.error(
                 "No complete pair was found. Each marketplace needs BOTH its "
-                "MP file AND its inventory file uploaded (DTC needs the Shopify MP file; "
+                "MP file AND its inventory file uploaded (DTC needs the SOH warehouse file; "
                 "MP Report needs Product Master)."
             )
         else:
