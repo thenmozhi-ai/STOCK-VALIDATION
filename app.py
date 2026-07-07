@@ -43,9 +43,26 @@ NOT_FOUND_LABELS = {
     "Shopee": "NOT IN SHOPEE",
     "TikTok": "NOT IN TIKTOK",
     "Zalora": "NOT IN ZALORA",
+    "Shopify": "NOT IN SHOPIFY",
 }
 
-MARKETPLACE_ORDER = ["Lazada", "Shopee", "TikTok", "Zalora"]
+MARKETPLACE_ORDER = ["Lazada", "Shopee", "TikTok", "Zalora", "Shopify"]
+
+# Brand accent colours used purely for the Streamlit UI (cards / headers).
+BRAND_COLORS = {
+    "Lazada": "#FF6B35",
+    "Shopee": "#F72585",
+    "TikTok": "#4CC9F0",
+    "Zalora": "#7209B7",
+    "Shopify": "#95BF47",
+}
+BRAND_ICONS = {
+    "Lazada": "🛍️",
+    "Shopee": "🧡",
+    "TikTok": "🎵",
+    "Zalora": "👗",
+    "Shopify": "🟢",
+}
 
 # ----------------------------------------------------------------------------
 # File-type detection
@@ -154,6 +171,29 @@ def parse_zalora_status_file(file_bytes: bytes) -> dict:
     df.columns = ["SellerSku", "ShopSku", "Name", "Status"]
     df["SellerSku"] = df["SellerSku"].astype(str).str.strip()
     return df.set_index("SellerSku")["Status"].astype(str).str.strip().str.lower().to_dict()
+
+
+def parse_shopify_export(file_bytes: bytes, filename: str) -> dict:
+    """Standard Shopify 'Export inventory' CSV. Auto-detects the SKU column
+    and the best available quantity column (Available > On hand > Quantity)."""
+    if filename.lower().endswith(".csv"):
+        df = pd.read_csv(io.BytesIO(file_bytes))
+    else:
+        df = pd.read_excel(io.BytesIO(file_bytes))
+    df.columns = [str(c).strip() for c in df.columns]
+
+    sku_col = next((c for c in df.columns if c.lower() == "sku"), None) \
+        or next((c for c in df.columns if "sku" in c.lower()), None)
+    qty_col = next((c for c in df.columns if c.lower() == "available"), None) \
+        or next((c for c in df.columns if "on hand" in c.lower()), None) \
+        or next((c for c in df.columns if "quantity" in c.lower()), None)
+
+    if not sku_col or not qty_col:
+        return {}
+
+    df[sku_col] = df[sku_col].astype(str).str.strip()
+    df[qty_col] = pd.to_numeric(df[qty_col], errors="coerce").fillna(0).astype(int)
+    return df.groupby(sku_col)[qty_col].sum().to_dict()
 
 
 def parse_soh(file_bytes: bytes) -> dict:
@@ -410,35 +450,149 @@ def apply_product_names(df: pd.DataFrame, name_lookup: dict) -> pd.DataFrame:
 # ----------------------------------------------------------------------------
 # Streamlit UI
 # ----------------------------------------------------------------------------
-st.title("📊 Multi-Marketplace Stock Validation")
-st.caption("Lazada · Shopee · TikTok — upload each file into its named slot, get one colour-coded workbook.")
+st.markdown(
+    """
+    <style>
+    .main .block-container { padding-top: 2rem; }
+    .mp-card {
+        border-radius: 12px;
+        padding: 1.1rem 1.3rem 1.3rem 1.3rem;
+        margin-bottom: 1.2rem;
+        border: 1px solid rgba(0,0,0,0.08);
+        box-shadow: 0 1px 4px rgba(0,0,0,0.06);
+    }
+    .mp-card-header {
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+        font-size: 1.15rem;
+        font-weight: 700;
+        margin-bottom: 0.6rem;
+        color: white;
+        padding: 0.45rem 0.9rem;
+        border-radius: 8px;
+    }
+    .ref-card {
+        border-radius: 12px;
+        padding: 1.1rem 1.3rem 1.3rem 1.3rem;
+        margin-bottom: 1.2rem;
+        border: 1px solid rgba(0,0,0,0.08);
+        background: linear-gradient(135deg, #f5f7fa 0%, #eef1f6 100%);
+    }
+    .legend-chip {
+        display: inline-block;
+        padding: 0.25rem 0.7rem;
+        border-radius: 14px;
+        font-size: 0.82rem;
+        font-weight: 600;
+        margin-right: 0.5rem;
+    }
+    .status-badge-ok { color: #1a7f37; font-weight: 700; }
+    .status-badge-missing { color: #b3261e; font-weight: 700; }
+    div.stButton > button[kind="primary"] {
+        background: linear-gradient(90deg, #FF6B35 0%, #F72585 50%, #7209B7 100%);
+        border: none;
+        font-weight: 700;
+    }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
 
+
+def mp_card_header(marketplace: str):
+    color = BRAND_COLORS[marketplace]
+    icon = BRAND_ICONS[marketplace]
+    st.markdown(
+        f'<div class="mp-card-header" style="background:{color};">{icon} {marketplace}</div>',
+        unsafe_allow_html=True,
+    )
+
+
+def readiness_line(mp_file, inv_file, extra_ok=True):
+    if mp_file and inv_file and extra_ok:
+        st.markdown('<span class="status-badge-ok">✅ Ready to validate</span>', unsafe_allow_html=True)
+    elif mp_file or inv_file:
+        missing = []
+        if not mp_file:
+            missing.append("MP file")
+        if not inv_file:
+            missing.append("inventory file")
+        st.markdown(
+            f'<span class="status-badge-missing">⚠️ Missing: {", ".join(missing)}</span>',
+            unsafe_allow_html=True,
+        )
+    else:
+        st.caption("Not uploaded — this marketplace will be skipped.")
+
+
+st.title("📊 Multi-Marketplace Stock Validation")
+st.caption("Lazada · Shopee · TikTok · Zalora · Shopify — upload each pair of files, get one colour-coded workbook.")
+
+with st.container():
+    st.markdown(
+        '<span class="legend-chip" style="background:#C6EFCE;color:#375623;">✅ TRUE / Match</span>'
+        '<span class="legend-chip" style="background:#FFC7CE;color:#9C0006;">❌ IMPACT / Mismatch</span>'
+        '<span class="legend-chip" style="background:#FFEB9C;color:#7D4800;">🟠 UPDATE 0</span>'
+        '<span class="legend-chip" style="background:#D9D9D9;color:#595959;">⬜ NOT FOUND</span>',
+        unsafe_allow_html=True,
+    )
+
+st.write("")
 brand_name = st.text_input("Brand / Shop name (shown on the summary tab)", value="My Shop")
 
-st.subheader("1. Marketplace stock files")
-mp_col1, mp_col2, mp_col3 = st.columns(3)
-with mp_col1:
-    lazada_mp_file = st.file_uploader("Lazada MP file", type=["xlsx"], key="lazada_mp")
-with mp_col2:
-    shopee_mp_file = st.file_uploader("Shopee MP file", type=["xlsx"], key="shopee_mp")
-with mp_col3:
-    tiktok_mp_file = st.file_uploader("Tiktok MP file", type=["xlsx"], key="tiktok_mp")
+st.markdown("### 1️⃣ Marketplace pairs")
+st.caption("Each marketplace needs BOTH its MP file and its inventory (StockValidation) file to run.")
 
-st.subheader("2. Inventory / StockValidation files")
-inv_col1, inv_col2, inv_col3 = st.columns(3)
-with inv_col1:
-    lazada_inv_file = st.file_uploader("Lazada inventory file", type=["csv"], key="lazada_inv")
-with inv_col2:
-    tc_shopee_inv_file = st.file_uploader("TC Shopee inventory file", type=["csv"], key="tc_shopee_inv")
-with inv_col3:
-    tiktok_inv_file = st.file_uploader("Tiktok inventory file", type=["csv"], key="tiktok_inv")
+row1 = st.columns(3)
+row2 = st.columns(2)
 
-st.subheader("3. Warehouse & reference (optional)")
-wh_col1, wh_col2 = st.columns(2)
-with wh_col1:
-    soh_file = st.file_uploader("SOH", type=["xls"], key="soh")
-with wh_col2:
-    product_master_file = st.file_uploader("Product Master file", type=["csv", "xlsx"], key="product_master")
+with row1[0]:
+    with st.container(border=True):
+        mp_card_header("Lazada")
+        lazada_mp_file = st.file_uploader("Lazada MP file", type=["xlsx"], key="lazada_mp")
+        lazada_inv_file = st.file_uploader("Lazada inventory file", type=["csv"], key="lazada_inv")
+        readiness_line(lazada_mp_file, lazada_inv_file)
+
+with row1[1]:
+    with st.container(border=True):
+        mp_card_header("Shopee")
+        shopee_mp_file = st.file_uploader("Shopee MP file", type=["xlsx"], key="shopee_mp")
+        tc_shopee_inv_file = st.file_uploader("TC Shopee inventory file", type=["csv"], key="tc_shopee_inv")
+        readiness_line(shopee_mp_file, tc_shopee_inv_file)
+
+with row1[2]:
+    with st.container(border=True):
+        mp_card_header("TikTok")
+        tiktok_mp_file = st.file_uploader("Tiktok MP file", type=["xlsx"], key="tiktok_mp")
+        tiktok_inv_file = st.file_uploader("Tiktok inventory file", type=["csv"], key="tiktok_inv")
+        readiness_line(tiktok_mp_file, tiktok_inv_file)
+
+with row2[0]:
+    with st.container(border=True):
+        mp_card_header("Zalora")
+        zalora_mp_file = st.file_uploader("Zalora MP file (SellerStockTemplate)", type=["xlsx"], key="zalora_mp")
+        zalora_inv_file = st.file_uploader("Zalora inventory file", type=["csv"], key="zalora_inv")
+        zalora_status_file = st.file_uploader(
+            "Zalora Status file (optional, SellerStatusTemplate)", type=["xlsx"], key="zalora_status")
+        readiness_line(zalora_mp_file, zalora_inv_file)
+
+with row2[1]:
+    with st.container(border=True):
+        mp_card_header("Shopify")
+        shopify_mp_file = st.file_uploader("Shopify MP file (Export inventory CSV)", type=["csv", "xlsx"], key="shopify_mp")
+        shopify_inv_file = st.file_uploader("Shopify inventory file", type=["csv"], key="shopify_inv")
+        readiness_line(shopify_mp_file, shopify_inv_file)
+
+st.markdown("### 2️⃣ Warehouse & reference (optional)")
+with st.container(border=True):
+    st.markdown('<div class="mp-card-header" style="background:#1F3864;">📦 Warehouse & Product Master</div>',
+                unsafe_allow_html=True)
+    wh_col1, wh_col2 = st.columns(2)
+    with wh_col1:
+        soh_file = st.file_uploader("SOH", type=["xls"], key="soh")
+    with wh_col2:
+        product_master_file = st.file_uploader("Product Master file", type=["csv", "xlsx"], key="product_master")
 
 with st.expander("ℹ️ Notes on file formats", expanded=False):
     st.markdown(
@@ -446,19 +600,20 @@ with st.expander("ℹ️ Notes on file formats", expanded=False):
 - **Lazada MP file** — the `pricestock...xlsx` Stock & Price export
 - **Shopee MP file** — the `mass_update_sales_info...xlsx` export
 - **Tiktok MP file** — the `Tiktoksellercenter_batchedit...xlsx` export
-- **Lazada / TC Shopee / Tiktok inventory file** — the StockValidation CSV for that marketplace
-  (`Seller SKU` + `Expected Stock` columns)
-- **SOH** — `SOHbySKU...xls` warehouse export (optional Step 1 check — needs an ALL report too, see below)
-- **Product Master file** — any file with a SKU column and a Name column; used only to add a
-  `Product Name` column to the report, doesn't affect matching
+- **Zalora MP file** — `SellerStockTemplate...xlsx`; optional Status file adds an active/inactive column
+- **Shopify MP file** — the standard Shopify "Export inventory" CSV (`SKU` + `Available` columns)
+- **Inventory files** — the StockValidation CSV for that marketplace (`Seller SKU` + `Expected Stock` columns)
+- **SOH** — `SOHbySKU...xls` warehouse export (shown as reference only in this version)
+- **Product Master file** — any file with a SKU column and a Name column; adds a `Product Name`
+  column to the report only, doesn't affect matching
 
 Only fill in the marketplaces you want validated — any subset works.
         """
     )
 
 any_uploaded = any([
-    lazada_mp_file, shopee_mp_file, tiktok_mp_file,
-    lazada_inv_file, tc_shopee_inv_file, tiktok_inv_file,
+    lazada_mp_file, shopee_mp_file, tiktok_mp_file, zalora_mp_file, shopify_mp_file,
+    lazada_inv_file, tc_shopee_inv_file, tiktok_inv_file, zalora_inv_file, shopify_inv_file,
     soh_file, product_master_file,
 ])
 
@@ -492,6 +647,22 @@ if any_uploaded:
             df = build_marketplace_df(stockval_df, sp_lookup, "TikTok")
             marketplace_data["TikTok"] = apply_product_names(df, name_lookup)
 
+        if zalora_inv_file and zalora_mp_file:
+            stockval_df = parse_stock_validation_csv(zalora_inv_file.read())
+            sp_lookup = parse_zalora_stock_file(zalora_mp_file.read())
+            status_lookup = parse_zalora_status_file(zalora_status_file.read()) if zalora_status_file else None
+            df = build_marketplace_df(stockval_df, sp_lookup, "Zalora", status_lookup)
+            marketplace_data["Zalora"] = apply_product_names(df, name_lookup)
+
+        if shopify_inv_file and shopify_mp_file:
+            stockval_df = parse_stock_validation_csv(shopify_inv_file.read())
+            sp_lookup = parse_shopify_export(shopify_mp_file.read(), shopify_mp_file.name)
+            if not sp_lookup:
+                st.warning("Shopify MP file uploaded but no SKU/Available columns could be detected — skipping Shopify.")
+            else:
+                df = build_marketplace_df(stockval_df, sp_lookup, "Shopify")
+                marketplace_data["Shopify"] = apply_product_names(df, name_lookup)
+
         warehouse_df = None
         if soh_file:
             soh_lookup = parse_soh(soh_file.read())
@@ -507,19 +678,19 @@ if any_uploaded:
                     "(no live-marketplace comparison available for this tab)."
                 )
 
+        pairs_to_check = [
+            ("Lazada", lazada_mp_file, lazada_inv_file),
+            ("Shopee", shopee_mp_file, tc_shopee_inv_file),
+            ("Tiktok", tiktok_mp_file, tiktok_inv_file),
+            ("Zalora", zalora_mp_file, zalora_inv_file),
+            ("Shopify", shopify_mp_file, shopify_inv_file),
+        ]
         missing_pairs = []
-        if lazada_mp_file and not lazada_inv_file:
-            missing_pairs.append("Lazada MP file uploaded without its inventory file")
-        if lazada_inv_file and not lazada_mp_file:
-            missing_pairs.append("Lazada inventory file uploaded without its MP file")
-        if shopee_mp_file and not tc_shopee_inv_file:
-            missing_pairs.append("Shopee MP file uploaded without its inventory file")
-        if tc_shopee_inv_file and not shopee_mp_file:
-            missing_pairs.append("TC Shopee inventory file uploaded without its MP file")
-        if tiktok_mp_file and not tiktok_inv_file:
-            missing_pairs.append("Tiktok MP file uploaded without its inventory file")
-        if tiktok_inv_file and not tiktok_mp_file:
-            missing_pairs.append("Tiktok inventory file uploaded without its MP file")
+        for name, mp_f, inv_f in pairs_to_check:
+            if mp_f and not inv_f:
+                missing_pairs.append(f"{name} MP file uploaded without its inventory file")
+            if inv_f and not mp_f:
+                missing_pairs.append(f"{name} inventory file uploaded without its MP file")
         if missing_pairs:
             st.warning("Skipped incomplete pairs: " + "; ".join(missing_pairs))
 
@@ -552,4 +723,4 @@ if any_uploaded:
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             )
 else:
-    st.info("Upload each marketplace's MP file + inventory file into the matching slot above to begin.")
+    st.info("Upload each marketplace's MP file + inventory file into the matching card above to begin.")
