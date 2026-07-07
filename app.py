@@ -44,9 +44,10 @@ NOT_FOUND_LABELS = {
     "TikTok": "NOT IN TIKTOK",
     "Zalora": "NOT IN ZALORA",
     "Shopify": "NOT IN SHOPIFY",
+    "DTC": "NOT IN SHOPIFY (DTC)",
 }
 
-MARKETPLACE_ORDER = ["Lazada", "Shopee", "TikTok", "Zalora", "Shopify"]
+MARKETPLACE_ORDER = ["Lazada", "Shopee", "TikTok", "Zalora", "Shopify", "DTC"]
 
 # Brand accent colours used purely for the Streamlit UI (cards / headers).
 BRAND_COLORS = {
@@ -55,6 +56,7 @@ BRAND_COLORS = {
     "TikTok": "#4CC9F0",
     "Zalora": "#7209B7",
     "Shopify": "#95BF47",
+    "DTC": "#3A86FF",
 }
 BRAND_ICONS = {
     "Lazada": "🛍️",
@@ -62,6 +64,7 @@ BRAND_ICONS = {
     "TikTok": "🎵",
     "Zalora": "👗",
     "Shopify": "🟢",
+    "DTC": "🏠",
 }
 
 # ----------------------------------------------------------------------------
@@ -302,9 +305,11 @@ def write_df_sheet(wb, sheet_name, df, remark_col="Remark", status_col="Status")
     color_map = {
         "TRUE": (GREEN_FILL, GREEN_FONT),
         "Match": (GREEN_FILL, GREEN_FONT),
+        "FOUND IN PM": (GREEN_FILL, GREEN_FONT),
         "IMPACT": (RED_FILL, RED_FONT),
         "Mismatch": (RED_FILL, RED_FONT),
         "UPDATE 0": (ORANGE_FILL, ORANGE_FONT),
+        "NOT IN PRODUCT MASTER": (GREY_FILL, GREY_FONT),
     }
     for label in NOT_FOUND_LABELS.values():
         color_map[label] = (GREY_FILL, GREY_FONT)
@@ -341,14 +346,14 @@ def write_df_sheet(wb, sheet_name, df, remark_col="Remark", status_col="Status")
     return ws
 
 
-def add_summary_block(ws, start_row, title, counts):
+def add_summary_block(ws, start_row, title, counts, labels=None):
     fill = PatternFill("solid", fgColor=NAVY)
     ws.cell(row=start_row, column=1, value=title).font = Font(name="Arial", size=12, bold=True, color="FFFFFF")
     ws.cell(row=start_row, column=1).fill = fill
     for c in range(2, 7):
         ws.cell(row=start_row, column=c).fill = fill
 
-    labels = ["Total", "TRUE", "IMPACT", "UPDATE 0", "NOT FOUND", "Total Mismatches"]
+    labels = labels or ["Total", "TRUE", "IMPACT", "UPDATE 0", "NOT FOUND", "Total Mismatches"]
     colors = [None, (GREEN_FILL, GREEN_FONT), (RED_FILL, RED_FONT), (ORANGE_FILL, ORANGE_FONT),
               (GREY_FILL, GREY_FONT), (RED_FILL, RED_FONT)]
     values = [
@@ -368,9 +373,9 @@ def add_summary_block(ws, start_row, title, counts):
     return start_row + 4
 
 
-def compute_counts(df, not_found_label):
+def compute_counts(df, not_found_label, match_label="TRUE"):
     total = len(df)
-    true_ct = (df["Remark"] == "TRUE").sum()
+    true_ct = (df["Remark"] == match_label).sum()
     impact_ct = (df["Remark"] == "IMPACT").sum()
     update0_ct = (df["Remark"] == "UPDATE 0").sum()
     nf_ct = (df["Remark"] == not_found_label).sum()
@@ -379,7 +384,8 @@ def compute_counts(df, not_found_label):
                 not_found=nf_ct, mismatches=mismatches)
 
 
-def build_workbook(marketplace_data: dict, warehouse_df: pd.DataFrame = None, brand_name="Shop"):
+def build_workbook(marketplace_data: dict, warehouse_df: pd.DataFrame = None, brand_name="Shop",
+                    mp_vs_pm_df: pd.DataFrame = None):
     wb = Workbook()
     wb.remove(wb.active)
     summary_ws = wb.create_sheet("Summary")
@@ -411,6 +417,16 @@ def build_workbook(marketplace_data: dict, warehouse_df: pd.DataFrame = None, br
         mism_df = warehouse_df[warehouse_df["Status"] == "Mismatch"]
         write_df_sheet(wb, "SOH vs ALL Mismatches", mism_df)
 
+    if mp_vs_pm_df is not None:
+        counts = compute_counts(mp_vs_pm_df, "NOT IN PRODUCT MASTER", match_label="FOUND IN PM")
+        row_cursor = add_summary_block(
+            summary_ws, row_cursor, "MP vs PRODUCT MASTER", counts,
+            labels=["Total", "Found in PM", "—", "—", "Not in PM", "Total Not Found"],
+        )
+        write_df_sheet(wb, "MP vs Product Master", mp_vs_pm_df)
+        mism_df = mp_vs_pm_df[mp_vs_pm_df["Status"] == "Mismatch"]
+        write_df_sheet(wb, "MP vs PM Mismatches", mism_df)
+
     return wb
 
 
@@ -440,6 +456,46 @@ def apply_product_names(df: pd.DataFrame, name_lookup: dict) -> pd.DataFrame:
         return df
     df = df.copy()
     df["Product Name"] = df["Seller SKU"].map(name_lookup).fillna("—")
+    cols = list(df.columns)
+    cols.remove("Product Name")
+    insert_at = cols.index("Seller SKU") + 1
+    cols.insert(insert_at, "Product Name")
+    return df[cols]
+
+
+def parse_mp_report(file_bytes: bytes, filename: str) -> pd.DataFrame:
+    """Generic MP report reader — auto-detects a SKU column and (optionally)
+    a quantity-like column. Returns a standardised dataframe."""
+    if filename.lower().endswith(".csv"):
+        df = pd.read_csv(io.BytesIO(file_bytes))
+    else:
+        df = pd.read_excel(io.BytesIO(file_bytes))
+    df.columns = [str(c).strip() for c in df.columns]
+
+    sku_col = next((c for c in df.columns if "sku" in c.lower()), None)
+    if not sku_col:
+        return pd.DataFrame()
+
+    qty_col = next((c for c in df.columns if "qty" in c.lower() or "quantity" in c.lower()
+                     or "stock" in c.lower()), None)
+
+    out = pd.DataFrame()
+    out["Seller SKU"] = df[sku_col].astype(str).str.strip()
+    out = out.drop_duplicates(subset="Seller SKU")
+    if qty_col:
+        qty_lookup = df.assign(**{sku_col: df[sku_col].astype(str).str.strip()}) \
+            .groupby(sku_col)[qty_col].sum()
+        out["MP_Quantity"] = out["Seller SKU"].map(qty_lookup)
+    return out
+
+
+def build_mp_vs_product_master_df(mp_df: pd.DataFrame, name_lookup: dict) -> pd.DataFrame:
+    """Compare an MP report's SKUs against the Product Master SKU list."""
+    df = mp_df.copy()
+    df["Product Name"] = df["Seller SKU"].map(name_lookup)
+    df["Status"] = df["Product Name"].apply(lambda x: "Match" if pd.notna(x) else "Mismatch")
+    df["Remark"] = df["Product Name"].apply(lambda x: "FOUND IN PM" if pd.notna(x) else "NOT IN PRODUCT MASTER")
+    df["Product Name"] = df["Product Name"].fillna("—")
     cols = list(df.columns)
     cols.remove("Product Name")
     insert_at = cols.index("Seller SKU") + 1
@@ -545,7 +601,7 @@ st.markdown("### 1️⃣ Marketplace pairs")
 st.caption("Each marketplace needs BOTH its MP file and its inventory (StockValidation) file to run.")
 
 row1 = st.columns(3)
-row2 = st.columns(2)
+row2 = st.columns(3)
 
 with row1[0]:
     with st.container(border=True):
@@ -584,15 +640,25 @@ with row2[1]:
         shopify_inv_file = st.file_uploader("Shopify inventory file", type=["csv"], key="shopify_inv")
         readiness_line(shopify_mp_file, shopify_inv_file)
 
+with row2[2]:
+    with st.container(border=True):
+        mp_card_header("DTC")
+        st.caption("Compares against the Shopify MP file uploaded above — no separate MP file needed here.")
+        dtc_inv_file = st.file_uploader("DTC inventory file", type=["csv"], key="dtc_inv")
+        readiness_line(shopify_mp_file, dtc_inv_file)
+
 st.markdown("### 2️⃣ Warehouse & reference (optional)")
 with st.container(border=True):
     st.markdown('<div class="mp-card-header" style="background:#1F3864;">📦 Warehouse & Product Master</div>',
                 unsafe_allow_html=True)
-    wh_col1, wh_col2 = st.columns(2)
+    wh_col1, wh_col2, wh_col3 = st.columns(3)
     with wh_col1:
         soh_file = st.file_uploader("SOH", type=["xls"], key="soh")
     with wh_col2:
         product_master_file = st.file_uploader("Product Master file", type=["csv", "xlsx"], key="product_master")
+    with wh_col3:
+        mp_report_file = st.file_uploader("MP Report file", type=["csv", "xlsx"], key="mp_report")
+        st.caption("Checked against Product Master by SKU — needs Product Master uploaded too.")
 
 with st.expander("ℹ️ Notes on file formats", expanded=False):
     st.markdown(
@@ -602,19 +668,23 @@ with st.expander("ℹ️ Notes on file formats", expanded=False):
 - **Tiktok MP file** — the `Tiktoksellercenter_batchedit...xlsx` export
 - **Zalora MP file** — `SellerStockTemplate...xlsx`; optional Status file adds an active/inactive column
 - **Shopify MP file** — the standard Shopify "Export inventory" CSV (`SKU` + `Available` columns)
+- **DTC inventory file** — StockValidation-style CSV for your own DTC site; validated against the
+  Shopify MP file's stock (upload that too)
 - **Inventory files** — the StockValidation CSV for that marketplace (`Seller SKU` + `Expected Stock` columns)
 - **SOH** — `SOHbySKU...xls` warehouse export (shown as reference only in this version)
 - **Product Master file** — any file with a SKU column and a Name column; adds a `Product Name`
-  column to the report only, doesn't affect matching
+  column to marketplace reports, doesn't affect matching
+- **MP Report file** — any file with a SKU column; checked against the Product Master's SKU list
+  to flag which SKUs are missing from the master
 
 Only fill in the marketplaces you want validated — any subset works.
         """
     )
 
 any_uploaded = any([
-    lazada_mp_file, shopee_mp_file, tiktok_mp_file, zalora_mp_file, shopify_mp_file,
+    lazada_mp_file, shopee_mp_file, tiktok_mp_file, zalora_mp_file, shopify_mp_file, dtc_inv_file,
     lazada_inv_file, tc_shopee_inv_file, tiktok_inv_file, zalora_inv_file, shopify_inv_file,
-    soh_file, product_master_file,
+    soh_file, product_master_file, mp_report_file,
 ])
 
 if any_uploaded:
@@ -654,14 +724,23 @@ if any_uploaded:
             df = build_marketplace_df(stockval_df, sp_lookup, "Zalora", status_lookup)
             marketplace_data["Zalora"] = apply_product_names(df, name_lookup)
 
-        if shopify_inv_file and shopify_mp_file:
+        shopify_sp_lookup = None
+        if shopify_mp_file:
+            shopify_sp_lookup = parse_shopify_export(shopify_mp_file.read(), shopify_mp_file.name)
+            if not shopify_sp_lookup:
+                st.warning("Shopify MP file uploaded but no SKU/Available columns could be detected.")
+
+        if shopify_inv_file and shopify_sp_lookup:
             stockval_df = parse_stock_validation_csv(shopify_inv_file.read())
-            sp_lookup = parse_shopify_export(shopify_mp_file.read(), shopify_mp_file.name)
-            if not sp_lookup:
-                st.warning("Shopify MP file uploaded but no SKU/Available columns could be detected — skipping Shopify.")
-            else:
-                df = build_marketplace_df(stockval_df, sp_lookup, "Shopify")
-                marketplace_data["Shopify"] = apply_product_names(df, name_lookup)
+            df = build_marketplace_df(stockval_df, shopify_sp_lookup, "Shopify")
+            marketplace_data["Shopify"] = apply_product_names(df, name_lookup)
+
+        if dtc_inv_file and shopify_sp_lookup:
+            stockval_df = parse_stock_validation_csv(dtc_inv_file.read())
+            df = build_marketplace_df(stockval_df, shopify_sp_lookup, "DTC")
+            marketplace_data["DTC"] = apply_product_names(df, name_lookup)
+        elif dtc_inv_file and not shopify_mp_file:
+            st.warning("DTC inventory file uploaded, but the Shopify MP file is needed to validate against — skipping DTC.")
 
         warehouse_df = None
         if soh_file:
@@ -677,6 +756,16 @@ if any_uploaded:
                     "SOH file loaded without an ALL report — showing warehouse stock as reference only "
                     "(no live-marketplace comparison available for this tab)."
                 )
+
+        mp_vs_pm_df = None
+        if mp_report_file and name_lookup:
+            mp_df = parse_mp_report(mp_report_file.read(), mp_report_file.name)
+            if mp_df.empty:
+                st.warning("MP Report file uploaded but no SKU column could be detected — skipping.")
+            else:
+                mp_vs_pm_df = build_mp_vs_product_master_df(mp_df, name_lookup)
+        elif mp_report_file and not name_lookup:
+            st.warning("MP Report file uploaded, but Product Master is needed to compare against — skipping.")
 
         pairs_to_check = [
             ("Lazada", lazada_mp_file, lazada_inv_file),
@@ -694,24 +783,28 @@ if any_uploaded:
         if missing_pairs:
             st.warning("Skipped incomplete pairs: " + "; ".join(missing_pairs))
 
-        if not marketplace_data and warehouse_df is None:
+        if not marketplace_data and warehouse_df is None and mp_vs_pm_df is None:
             st.error(
-                "No complete marketplace pair was found. Each marketplace needs BOTH its "
-                "MP file AND its inventory file uploaded."
+                "No complete pair was found. Each marketplace needs BOTH its "
+                "MP file AND its inventory file uploaded (DTC needs the Shopify MP file; "
+                "MP Report needs Product Master)."
             )
         else:
-            wb = build_workbook(marketplace_data, warehouse_df, brand_name)
+            wb = build_workbook(marketplace_data, warehouse_df, brand_name, mp_vs_pm_df)
             buf = io.BytesIO()
             wb.save(buf)
             buf.seek(0)
 
-            suffix = "Multi" if len(marketplace_data) > 1 else (list(marketplace_data)[0] if marketplace_data else "Warehouse")
+            suffix = "Multi" if len(marketplace_data) > 1 else (list(marketplace_data)[0] if marketplace_data else "Report")
             filename = f"Stock_Validation_{suffix}_{datetime.now().strftime('%Y%m%d')}.xlsx"
 
             st.success("Validation complete!")
-            if marketplace_data:
-                cols = st.columns(len(marketplace_data))
-                for i, (mp, df) in enumerate(marketplace_data.items()):
+            metric_items = list(marketplace_data.items())
+            if mp_vs_pm_df is not None:
+                metric_items.append(("MP vs PM", mp_vs_pm_df))
+            if metric_items:
+                cols = st.columns(len(metric_items))
+                for i, (mp, df) in enumerate(metric_items):
                     with cols[i]:
                         mismatches = (df["Status"] == "Mismatch").sum()
                         st.metric(f"{mp} mismatches", int(mismatches), delta=None)
