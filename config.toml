@@ -1,0 +1,5 @@
+# Raises Streamlit's default 200 MB upload cap so multiple/large ZIP bundles
+# of marketplace reports can be uploaded together without hitting a limit.
+# Increase further if needed — this is in megabytes.
+[server]
+maxUploadSize = 5000
