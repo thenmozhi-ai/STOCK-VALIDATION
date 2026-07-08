@@ -53,6 +53,7 @@ both the StockValidation CSV *and* the matching stock file are present.
 ## Output
 
 A single `.xlsx` workbook:
+
 - **Summary** — KPI dashboard, one block per marketplace
 - **`{Marketplace} - StockVal`** — full comparison with Status/Remark columns
 - **`{Marketplace} - Mismatches`** — mismatch rows only
