@@ -221,6 +221,48 @@ def parse_soh(file_bytes: bytes) -> dict:
     return lookup
 
 
+def parse_warehouse_report(file_bytes: bytes, filename: str) -> dict:
+    """Generic SellerSKU + quantity warehouse report from any CSV/XLSX source.
+    Auto-detects a SKU-like column and a quantity-like column."""
+    name = filename.lower()
+    if name.endswith(".csv"):
+        df = pd.read_csv(io.BytesIO(file_bytes))
+    elif name.endswith(".xls"):
+        # Some warehouse exports still use the legacy XML-XLS format like SOHbySKU.
+        try:
+            return parse_soh(file_bytes)
+        except Exception:
+            df = pd.read_excel(io.BytesIO(file_bytes))
+    else:
+        df = pd.read_excel(io.BytesIO(file_bytes))
+
+    df.columns = [str(c).strip() for c in df.columns]
+    sku_col = next((c for c in df.columns if "sku" in c.lower()), None)
+    qty_col = next((c for c in df.columns if "qty" in c.lower() or "quantity" in c.lower()
+                     or "stock" in c.lower()), None)
+    if not sku_col or not qty_col:
+        return {}
+
+    df[sku_col] = df[sku_col].astype(str).str.strip()
+    df[qty_col] = pd.to_numeric(df[qty_col], errors="coerce").fillna(0).astype(int)
+    return df.groupby(sku_col)[qty_col].sum().to_dict()
+
+
+def build_warehouse_vs_soh_df(warehouse_lookup: dict, soh_lookup: dict) -> pd.DataFrame:
+    """Compare a Warehouse report's stock against SOH, SKU by SKU."""
+    all_skus = set(warehouse_lookup) | set(soh_lookup)
+    rows = []
+    for sku in sorted(all_skus):
+        wh_qty = warehouse_lookup.get(sku)
+        soh_qty = soh_lookup.get(sku)
+        if wh_qty is None:
+            continue
+        status, remark = get_status_remark(wh_qty, soh_qty, "NOT IN SOH")
+        rows.append({"Seller SKU": sku, "Expected Stock": wh_qty, "SP_Quantity": soh_qty,
+                     "Status": status, "Remark": remark})
+    return pd.DataFrame(rows)
+
+
 def parse_all_report(file_bytes: bytes) -> dict:
     df = pd.read_csv(io.BytesIO(file_bytes))
     df.columns = [c.strip() for c in df.columns]
@@ -301,6 +343,7 @@ def write_df_sheet(wb, sheet_name, df, remark_col="Remark", status_col="Status")
 
     remark_idx = df.columns.get_loc(remark_col) + 1 if remark_col in df.columns else None
     status_idx = df.columns.get_loc(status_col) + 1 if status_col in df.columns else None
+    pm_check_idx = df.columns.get_loc("In Product Master") + 1 if "In Product Master" in df.columns else None
 
     color_map = {
         "TRUE": (GREEN_FILL, GREEN_FONT),
@@ -310,6 +353,7 @@ def write_df_sheet(wb, sheet_name, df, remark_col="Remark", status_col="Status")
         "Mismatch": (RED_FILL, RED_FONT),
         "UPDATE 0": (ORANGE_FILL, ORANGE_FONT),
         "NOT IN PRODUCT MASTER": (GREY_FILL, GREY_FONT),
+        "NOT IN SOH": (GREY_FILL, GREY_FONT),
     }
     for label in NOT_FOUND_LABELS.values():
         color_map[label] = (GREY_FILL, GREY_FONT)
@@ -329,6 +373,13 @@ def write_df_sheet(wb, sheet_name, df, remark_col="Remark", status_col="Status")
                     cell = ws.cell(row=r_i, column=idx)
                     cell.fill = PatternFill("solid", fgColor=fill_color)
                     cell.font = Font(name="Arial", size=10, bold=True, color=font_color)
+
+        if pm_check_idx:
+            pm_val = df.iloc[r_i - 2]["In Product Master"]
+            pm_fill, pm_font = (GREEN_FILL, GREEN_FONT) if pm_val == "Yes" else (GREY_FILL, GREY_FONT)
+            cell = ws.cell(row=r_i, column=pm_check_idx)
+            cell.fill = PatternFill("solid", fgColor=pm_fill)
+            cell.font = Font(name="Arial", size=10, bold=True, color=pm_font)
 
     ws.freeze_panes = "A2"
     ws.auto_filter.ref = ws.dimensions
@@ -385,7 +436,7 @@ def compute_counts(df, not_found_label, match_label="TRUE"):
 
 
 def build_workbook(marketplace_data: dict, warehouse_df: pd.DataFrame = None, brand_name="Shop",
-                    mp_vs_pm_df: pd.DataFrame = None):
+                    mp_vs_pm_df: pd.DataFrame = None, warehouse_vs_soh_df: pd.DataFrame = None):
     wb = Workbook()
     wb.remove(wb.active)
     summary_ws = wb.create_sheet("Summary")
@@ -412,10 +463,8 @@ def build_workbook(marketplace_data: dict, warehouse_df: pd.DataFrame = None, br
 
     if warehouse_df is not None:
         counts = compute_counts(warehouse_df, "NOT FOUND")
-        row_cursor = add_summary_block(summary_ws, row_cursor, "SOH vs ALL", counts)
-        write_df_sheet(wb, "SOH vs ALL", warehouse_df)
-        mism_df = warehouse_df[warehouse_df["Status"] == "Mismatch"]
-        write_df_sheet(wb, "SOH vs ALL Mismatches", mism_df)
+        row_cursor = add_summary_block(summary_ws, row_cursor, "SOH (Reference)", counts)
+        write_df_sheet(wb, "SOH Reference", warehouse_df)
 
     if mp_vs_pm_df is not None:
         counts = compute_counts(mp_vs_pm_df, "NOT IN PRODUCT MASTER", match_label="FOUND IN PM")
@@ -426,6 +475,13 @@ def build_workbook(marketplace_data: dict, warehouse_df: pd.DataFrame = None, br
         write_df_sheet(wb, "MP vs Product Master", mp_vs_pm_df)
         mism_df = mp_vs_pm_df[mp_vs_pm_df["Status"] == "Mismatch"]
         write_df_sheet(wb, "MP vs PM Mismatches", mism_df)
+
+    if warehouse_vs_soh_df is not None:
+        counts = compute_counts(warehouse_vs_soh_df, "NOT IN SOH")
+        row_cursor = add_summary_block(summary_ws, row_cursor, "WAREHOUSE vs SOH", counts)
+        write_df_sheet(wb, "Warehouse vs SOH", warehouse_vs_soh_df)
+        mism_df = warehouse_vs_soh_df[warehouse_vs_soh_df["Status"] == "Mismatch"]
+        write_df_sheet(wb, "Warehouse vs SOH Mismatches", mism_df)
 
     return wb
 
@@ -460,6 +516,21 @@ def apply_product_names(df: pd.DataFrame, name_lookup: dict) -> pd.DataFrame:
     cols.remove("Product Name")
     insert_at = cols.index("Seller SKU") + 1
     cols.insert(insert_at, "Product Name")
+    return df[cols]
+
+
+def apply_product_master_check(df: pd.DataFrame, name_lookup: dict) -> pd.DataFrame:
+    """Adds 'Product Name' + an explicit 'In Product Master' Yes/No cross-check column,
+    matched by Seller SKU. Used for Warehouse report and DTC report tabs."""
+    df = apply_product_names(df, name_lookup)
+    if not name_lookup or "Seller SKU" not in df.columns:
+        return df
+    df = df.copy()
+    df["In Product Master"] = df["Seller SKU"].isin(name_lookup.keys()).map({True: "Yes", False: "No"})
+    cols = list(df.columns)
+    cols.remove("In Product Master")
+    insert_at = cols.index("Product Name") + 1 if "Product Name" in cols else cols.index("Seller SKU") + 1
+    cols.insert(insert_at, "In Product Master")
     return df[cols]
 
 
@@ -651,12 +722,15 @@ st.markdown("### 2️⃣ Warehouse & reference (optional)")
 with st.container(border=True):
     st.markdown('<div class="mp-card-header" style="background:#1F3864;">📦 Warehouse & Product Master</div>',
                 unsafe_allow_html=True)
-    wh_col1, wh_col2, wh_col3 = st.columns(3)
+    wh_col1, wh_col2, wh_col3, wh_col4 = st.columns(4)
     with wh_col1:
         soh_file = st.file_uploader("SOH", type=["xls"], key="soh")
     with wh_col2:
-        product_master_file = st.file_uploader("Product Master file", type=["csv", "xlsx"], key="product_master")
+        warehouse_report_file = st.file_uploader("Warehouse report", type=["csv", "xlsx"], key="warehouse_report")
+        st.caption("Compared against SOH by SKU.")
     with wh_col3:
+        product_master_file = st.file_uploader("Product Master file", type=["csv", "xlsx"], key="product_master")
+    with wh_col4:
         mp_report_file = st.file_uploader("MP Report file", type=["csv", "xlsx"], key="mp_report")
         st.caption("Checked against Product Master by SKU — needs Product Master uploaded too.")
 
@@ -673,6 +747,8 @@ with st.expander("ℹ️ Notes on file formats", expanded=False):
 - **Shopify MP file** — the standard Shopify "Export inventory" CSV (`SKU` + `Available` columns)
 - **DTC inventory file** — StockValidation-style CSV for your own DTC site; validated against the
   SOH warehouse file (upload that too)
+- **Warehouse report** — a second warehouse stock source (SKU + quantity, any column names);
+  compared directly against SOH, SKU by SKU
 - **Inventory files** — the StockValidation CSV for that marketplace (`Seller SKU` + `Expected Stock` columns)
 - **SOH** — `SOHbySKU...xls` warehouse export (shown as reference only in this version)
 - **Product Master file** — any file with a SKU column and a Name column; adds a `Product Name`
@@ -687,7 +763,7 @@ Only fill in the marketplaces you want validated — any subset works.
 any_uploaded = any([
     lazada_mp_file, shopee_mp_file, tiktok_mp_file, zalora_mp_file, shopify_mp_file, dtc_inv_file,
     lazada_inv_file, tc_shopee_inv_file, tiktok_inv_file, zalora_inv_file, shopify_inv_file,
-    soh_file, product_master_file, mp_report_file,
+    soh_file, product_master_file, mp_report_file, warehouse_report_file,
 ])
 
 if any_uploaded:
@@ -745,22 +821,31 @@ if any_uploaded:
         if dtc_inv_file and soh_lookup:
             stockval_df = parse_stock_validation_csv(dtc_inv_file.read())
             df = build_marketplace_df(stockval_df, soh_lookup, "DTC")
-            marketplace_data["DTC"] = apply_product_names(df, name_lookup)
+            marketplace_data["DTC"] = apply_product_master_check(df, name_lookup)
         elif dtc_inv_file and not soh_file:
             st.warning("DTC inventory file uploaded, but the SOH warehouse file is needed to validate against — skipping DTC.")
 
         warehouse_df = None
-        if soh_lookup:
+        warehouse_vs_soh_df = None
+        if warehouse_report_file and soh_lookup:
+            wh_lookup = parse_warehouse_report(warehouse_report_file.read(), warehouse_report_file.name)
+            if not wh_lookup:
+                st.warning("Warehouse report uploaded but no SKU/quantity columns could be detected — skipping.")
+            else:
+                warehouse_vs_soh_df = apply_product_master_check(build_warehouse_vs_soh_df(wh_lookup, soh_lookup), name_lookup)
+        elif warehouse_report_file and not soh_file:
+            st.warning("Warehouse report uploaded, but SOH is needed to compare against — skipping.")
+        elif soh_lookup and not warehouse_report_file:
             rows = [
                 {"Seller SKU": sku, "Expected Stock": qty, "SP_Quantity": None,
                  "Status": "Mismatch", "Remark": "NOT FOUND"}
                 for sku, qty in soh_lookup.items()
             ]
             if rows:
-                warehouse_df = apply_product_names(pd.DataFrame(rows), name_lookup)
+                warehouse_df = apply_product_master_check(pd.DataFrame(rows), name_lookup)
                 st.info(
-                    "SOH file loaded without an ALL report — showing warehouse stock as reference only "
-                    "(no live-marketplace comparison available for this tab)."
+                    "SOH file loaded without a Warehouse report — showing warehouse stock as reference only "
+                    "(no comparison available for this tab)."
                 )
 
         mp_vs_pm_df = None
@@ -789,14 +874,15 @@ if any_uploaded:
         if missing_pairs:
             st.warning("Skipped incomplete pairs: " + "; ".join(missing_pairs))
 
-        if not marketplace_data and warehouse_df is None and mp_vs_pm_df is None:
+        if (not marketplace_data and warehouse_df is None and mp_vs_pm_df is None
+                and warehouse_vs_soh_df is None):
             st.error(
                 "No complete pair was found. Each marketplace needs BOTH its "
                 "MP file AND its inventory file uploaded (DTC needs the SOH warehouse file; "
-                "MP Report needs Product Master)."
+                "MP Report needs Product Master; Warehouse report needs SOH)."
             )
         else:
-            wb = build_workbook(marketplace_data, warehouse_df, brand_name, mp_vs_pm_df)
+            wb = build_workbook(marketplace_data, warehouse_df, brand_name, mp_vs_pm_df, warehouse_vs_soh_df)
             buf = io.BytesIO()
             wb.save(buf)
             buf.seek(0)
@@ -808,6 +894,8 @@ if any_uploaded:
             metric_items = list(marketplace_data.items())
             if mp_vs_pm_df is not None:
                 metric_items.append(("MP vs PM", mp_vs_pm_df))
+            if warehouse_vs_soh_df is not None:
+                metric_items.append(("Warehouse vs SOH", warehouse_vs_soh_df))
             if metric_items:
                 cols = st.columns(len(metric_items))
                 for i, (mp, df) in enumerate(metric_items):
