@@ -672,7 +672,7 @@ st.markdown("### 1️⃣ Marketplace pairs")
 st.caption("Each marketplace needs BOTH its MP file and its inventory (StockValidation) file to run.")
 
 row1 = st.columns(3)
-row2 = st.columns(3)
+row2 = st.columns(2)
 
 with row1[0]:
     with st.container(border=True):
@@ -711,31 +711,27 @@ with row2[1]:
         shopify_inv_file = st.file_uploader("Shopify inventory file", type=["csv"], key="shopify_inv")
         readiness_line(shopify_mp_file, shopify_inv_file)
 
-with row2[2]:
-    with st.container(border=True):
-        mp_card_header("DTC")
-        st.caption("Compares against the SOH warehouse file below — no separate MP file needed here.")
-        dtc_inv_file = st.file_uploader("DTC inventory file", type=["csv"], key="dtc_inv")
-        dtc_readiness_slot = st.empty()
-
-st.markdown("### 2️⃣ Warehouse & reference (optional)")
+st.markdown("### 2️⃣ Warehouse & Product Master (optional)")
 with st.container(border=True):
     st.markdown('<div class="mp-card-header" style="background:#1F3864;">📦 Warehouse & Product Master</div>',
                 unsafe_allow_html=True)
-    wh_col1, wh_col2, wh_col3, wh_col4 = st.columns(4)
-    with wh_col1:
+    wh_row1 = st.columns(3)
+    with wh_row1[0]:
         soh_file = st.file_uploader("SOH", type=["xls"], key="soh")
-    with wh_col2:
+    with wh_row1[1]:
         warehouse_report_file = st.file_uploader("Warehouse report", type=["csv", "xlsx"], key="warehouse_report")
         st.caption("Compared against SOH by SKU.")
-    with wh_col3:
+    with wh_row1[2]:
+        dtc_inv_file = st.file_uploader("DTC inventory file", type=["csv"], key="dtc_inv")
+        st.caption("Compared against SOH + cross-checked with Product Master by SKU.")
+        readiness_line(soh_file, dtc_inv_file)
+
+    wh_row2 = st.columns(2)
+    with wh_row2[0]:
         product_master_file = st.file_uploader("Product Master file", type=["csv", "xlsx"], key="product_master")
-    with wh_col4:
+    with wh_row2[1]:
         mp_report_file = st.file_uploader("MP Report file", type=["csv", "xlsx"], key="mp_report")
         st.caption("Checked against Product Master by SKU — needs Product Master uploaded too.")
-
-with dtc_readiness_slot:
-    readiness_line(soh_file, dtc_inv_file)
 
 with st.expander("ℹ️ Notes on file formats", expanded=False):
     st.markdown(
