@@ -79,9 +79,11 @@ def classify_file(filename: str):
     if "mass_update_sales_info" in name:
         return "Shopee", "mass_update"
     if "tiktoksellercenter_batchedit" in name or "batchedit" in name:
+        if "inactive" in name:
+            return "TikTok", "batch_edit_inactive"
+        if "active" in name:
+            return "TikTok", "batch_edit_active"
         return "TikTok", "batch_edit"
-    if "tiktok" in name and ("status" in name or "active" in name):
-        return "TikTok", "status_file"
     if "sellerstocktemplate" in name:
         return "Zalora", "stock_file"
     if "sellerstatustemplate" in name:
@@ -227,22 +229,18 @@ def parse_zalora_status_file(file_bytes: bytes) -> dict:
     return df.set_index("SellerSku")["Status"].astype(str).str.strip().str.lower().to_dict()
 
 
-def parse_tiktok_status_file(file_bytes: bytes) -> dict:
-    """TikTok Active/Inactive listing status export. Auto-detects a SKU-like
-    column and a status-like column by header keyword, so it works whether
-    the export is the Seller Center 'Product List' or a similar report."""
-    df = pd.read_excel(io.BytesIO(file_bytes), header=0)
-    df.columns = [str(c).strip() for c in df.columns]
-
-    sku_col = next((c for c in df.columns if "seller sku" in c.lower()), None) \
-        or next((c for c in df.columns if "sku" in c.lower()), None)
-    status_col = next((c for c in df.columns if "status" in c.lower()), None)
-
-    if not sku_col or not status_col:
-        return {}
-
-    df[sku_col] = df[sku_col].astype(str).str.strip()
-    return df.set_index(sku_col)[status_col].astype(str).str.strip().str.lower().to_dict()
+def build_tiktok_status_lookup(active_lookup: dict, inactive_lookup: dict) -> dict:
+    """Derive a SKU -> 'active'/'inactive' status map from two separate TikTok
+    batch-edit exports (one containing only active listings, one containing
+    only inactive listings). If a SKU appears in both, it's marked inactive
+    (a listing that's since been deactivated) and a caller may want to warn
+    about the overlap."""
+    status = {}
+    for sku in active_lookup:
+        status[sku] = "active"
+    for sku in inactive_lookup:
+        status[sku] = "inactive"
+    return status
 
 
 def parse_shopify_export(file_bytes: bytes, filename: str) -> dict:
@@ -899,11 +897,16 @@ with row1[2]:
         tiktok_mp_file = st.file_uploader(
             "TikTok Batch Edit Report (Tiktoksellercenter_batchedit...xlsx)",
             type=["xlsx", "zip"], key="tiktok_mp")
-        tiktok_status_file = st.file_uploader(
-            "TikTok Active/Inactive MP Report (optional)",
-            type=["xlsx", "zip"], key="tiktok_status")
-        if not tiktok_status_file and ("TikTok", "status_file") in bulk_zip_map:
-            st.caption("✅ TikTok Active/Inactive report found in the bulk ZIP.")
+        tiktok_active_file = st.file_uploader(
+            "TikTok Active Batch Edit (optional)",
+            type=["xlsx", "zip"], key="tiktok_active")
+        tiktok_inactive_file = st.file_uploader(
+            "TikTok Inactive Batch Edit (optional)",
+            type=["xlsx", "zip"], key="tiktok_inactive")
+        if not tiktok_active_file and ("TikTok", "batch_edit_active") in bulk_zip_map:
+            st.caption("✅ TikTok Active Batch Edit found in the bulk ZIP.")
+        if not tiktok_inactive_file and ("TikTok", "batch_edit_inactive") in bulk_zip_map:
+            st.caption("✅ TikTok Inactive Batch Edit found in the bulk ZIP.")
         tiktok_inv_file = st.file_uploader("Tiktok inventory file", type=["csv", "zip"], key="tiktok_inv")
         readiness_line(
             slot_present(tiktok_mp_file, "TikTok", "batch_edit", bulk_zip_map),
@@ -959,7 +962,10 @@ with st.expander("ℹ️ Notes on file formats", expanded=False):
 - **Lazada MP file** — the `pricestock...xlsx` Stock & Price export
 - **Shopee MP file** — the `mass_update_sales_info...xlsx` export
 - **TikTok Batch Edit Report** — the `Tiktoksellercenter_batchedit...xlsx` export
-- **TikTok Active/Inactive MP Report** — optional; listing status per SKU, adds a `TikTok_Status` column
+- **TikTok Active Batch Edit / Inactive Batch Edit** — optional; the same batch-edit
+  export filtered to only Active or only Inactive listings on TikTok Seller Center.
+  Uploading either (or both) adds a `TikTok_Status` column, built from which file
+  each SKU appears in.
 - **Zalora MP file** — `SellerStockTemplate...xlsx`; optional Status file adds an active/inactive column
 - **Shopify MP file** — the standard Shopify "Export inventory" CSV (`SKU` + `Available` columns)
 - **DTC inventory file** — StockValidation-style CSV for your own DTC site; validated against the
@@ -978,7 +984,7 @@ Only fill in the marketplaces you want validated — any subset works.
     )
 
 any_uploaded = any([
-    lazada_mp_file, shopee_mp_file, tiktok_mp_file, tiktok_status_file, zalora_mp_file,
+    lazada_mp_file, shopee_mp_file, tiktok_mp_file, tiktok_active_file, tiktok_inactive_file, zalora_mp_file,
     shopify_mp_file, dtc_inv_file, lazada_inv_file, tc_shopee_inv_file, tiktok_inv_file,
     zalora_inv_file, shopify_inv_file, soh_file, product_master_file, mp_report_file,
     warehouse_report_file, bool(bulk_zip_map),
@@ -1020,10 +1026,18 @@ if any_uploaded:
         if tiktok_inv_bytes and tiktok_mp_bytes:
             stockval_df = parse_stock_validation_csv(tiktok_inv_bytes)
             sp_lookup = parse_tiktok_batch_edit(tiktok_mp_bytes)
-            tiktok_status_bytes = resolve_bytes(tiktok_status_file, "TikTok", "status_file", bulk_zip_map)
-            tiktok_status_lookup = parse_tiktok_status_file(tiktok_status_bytes) if tiktok_status_bytes else None
-            if tiktok_status_bytes and not tiktok_status_lookup:
-                st.warning("TikTok Active/Inactive report found but no SKU/Status columns could be detected — skipping status column.")
+
+            tiktok_active_bytes = resolve_bytes(tiktok_active_file, "TikTok", "batch_edit_active", bulk_zip_map)
+            tiktok_inactive_bytes = resolve_bytes(tiktok_inactive_file, "TikTok", "batch_edit_inactive", bulk_zip_map)
+            active_lookup = parse_tiktok_batch_edit(tiktok_active_bytes) if tiktok_active_bytes else {}
+            inactive_lookup = parse_tiktok_batch_edit(tiktok_inactive_bytes) if tiktok_inactive_bytes else {}
+            tiktok_status_lookup = build_tiktok_status_lookup(active_lookup, inactive_lookup) \
+                if (active_lookup or inactive_lookup) else None
+            overlap = set(active_lookup) & set(inactive_lookup)
+            if overlap:
+                st.warning(f"TikTok: {len(overlap)} SKU(s) appear in both the Active and Inactive "
+                           f"batch edit files — marked as Inactive.")
+
             df = build_marketplace_df(stockval_df, sp_lookup, "TikTok", tiktok_status_lookup)
             marketplace_data["TikTok"] = apply_product_names(df, name_lookup)
 
