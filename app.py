@@ -14,6 +14,7 @@ Deploy on Streamlit Community Cloud:
 """
 
 import io
+import os
 import re
 import zipfile
 import xml.etree.ElementTree as ET
@@ -792,60 +793,135 @@ def build_mp_vs_product_master_df(mp_df: pd.DataFrame, name_lookup: dict) -> pd.
     return df[cols]
 
 
+
 # ----------------------------------------------------------------------------
-# Streamlit UI
+# Streamlit UI — professional admin-dashboard layout
 # ----------------------------------------------------------------------------
+REPORTS_DIR = "Reports"
+
 st.markdown(
     """
     <style>
-    .main .block-container { padding-top: 2rem; }
-    .mp-card {
-        border-radius: 12px;
-        padding: 1.1rem 1.3rem 1.3rem 1.3rem;
-        margin-bottom: 1.2rem;
-        border: 1px solid rgba(0,0,0,0.08);
-        box-shadow: 0 1px 4px rgba(0,0,0,0.06);
+    .main .block-container { padding-top: 1.5rem; max-width: 1200px; }
+
+    /* Sidebar */
+    [data-testid="stSidebar"] {
+        background-color: #F4F5F7;
+        border-right: 1px solid #E3E5E9;
     }
-    .mp-card-header {
-        display: flex;
-        align-items: center;
-        gap: 0.5rem;
-        font-size: 1.15rem;
+    [data-testid="stSidebar"] .block-container { padding-top: 1.2rem; }
+    .sidebar-eyebrow {
+        font-size: 0.72rem;
         font-weight: 700;
-        margin-bottom: 0.6rem;
-        color: white;
-        padding: 0.45rem 0.9rem;
-        border-radius: 8px;
+        letter-spacing: 0.08em;
+        color: #5B6472;
+        margin: 1.1rem 0 0.5rem 0;
+        text-transform: uppercase;
     }
-    .ref-card {
-        border-radius: 12px;
-        padding: 1.1rem 1.3rem 1.3rem 1.3rem;
-        margin-bottom: 1.2rem;
-        border: 1px solid rgba(0,0,0,0.08);
-        background: linear-gradient(135deg, #f5f7fa 0%, #eef1f6 100%);
+    [data-testid="stSidebar"] [data-testid="stExpander"] {
+        background: #FFFFFF;
+        border-radius: 10px;
+        border: 1px solid #E3E5E9;
+        margin-bottom: 0.5rem;
     }
-    .legend-chip {
-        display: inline-block;
-        padding: 0.25rem 0.7rem;
+    [data-testid="stSidebar"] .stSelectbox > div > div {
+        border-radius: 10px;
+    }
+
+    /* Header */
+    .app-header-bar {
+        background: linear-gradient(90deg, #1F3864 0%, #2E4E86 100%);
         border-radius: 14px;
-        font-size: 0.82rem;
-        font-weight: 600;
-        margin-right: 0.5rem;
+        padding: 1.4rem 1.8rem;
+        margin-bottom: 1rem;
+        box-shadow: 0 4px 14px rgba(31,56,100,0.18);
     }
-    .status-badge-ok { color: #1a7f37; font-weight: 700; }
-    .status-badge-missing { color: #b3261e; font-weight: 700; }
-    div.stButton > button[kind="primary"] {
-        background: linear-gradient(90deg, #FF6B35 0%, #F72585 50%, #7209B7 100%);
-        border: none;
+    .app-header-bar h1 {
+        color: #FFFFFF;
+        font-size: 1.7rem;
+        font-weight: 800;
+        margin: 0;
+    }
+    .app-subheader {
+        color: #4B5563;
+        font-size: 0.95rem;
+        margin: 0.9rem 0 1.2rem 0;
+        padding: 0.6rem 1rem;
+        background: #F4F5F7;
+        border-radius: 10px;
+        border: 1px solid #E3E5E9;
+        display: inline-block;
+    }
+
+    /* Cards */
+    .status-card {
+        background: #FFFFFF;
+        border-radius: 12px;
+        border: 1px solid #E3E5E9;
+        box-shadow: 0 1px 6px rgba(15,23,42,0.05);
+        padding: 0.85rem 1rem;
+        margin-bottom: 0.6rem;
+    }
+    .status-card-title {
         font-weight: 700;
+        font-size: 0.95rem;
+        color: #1F3864;
+        margin-bottom: 0.35rem;
+    }
+    .badge {
+        display: inline-block;
+        padding: 0.18rem 0.6rem;
+        border-radius: 999px;
+        font-size: 0.75rem;
+        font-weight: 700;
+        margin: 0.12rem 0.25rem 0.12rem 0;
+    }
+    .badge-ok { background: #DCFCE7; color: #166534; }
+    .badge-missing { background: #F1F2F4; color: #6B7280; }
+
+    .kpi-card {
+        background: #FFFFFF;
+        border-radius: 14px;
+        border-top: 5px solid var(--kpi-color, #1F3864);
+        box-shadow: 0 2px 10px rgba(15,23,42,0.06);
+        padding: 1.1rem 0.8rem;
+        text-align: center;
+    }
+    .kpi-value { font-size: 1.7rem; font-weight: 800; color: #1F2937; line-height: 1.1; }
+    .kpi-label { font-size: 0.8rem; font-weight: 600; color: #6B7280; margin-top: 0.25rem; }
+    .kpi-icon { font-size: 1.3rem; margin-bottom: 0.2rem; }
+
+    div.stButton > button[kind="primary"] {
+        background: #1F3864;
+        border: none;
+        border-radius: 10px;
+        font-weight: 700;
+        padding: 0.6rem 1.4rem;
+    }
+    div.stButton > button[kind="primary"]:hover { background: #16294D; }
+    div.stDownloadButton > button {
+        border-radius: 10px;
+        font-weight: 600;
+    }
+    [data-testid="stFileUploader"] {
+        border-radius: 10px;
+    }
+    div[data-testid="stTabs"] button[role="tab"] {
+        font-weight: 600;
+        border-radius: 8px 8px 0 0;
     }
     </style>
     """,
     unsafe_allow_html=True,
 )
 
+if "validation_done" not in st.session_state:
+    st.session_state["validation_done"] = False
+
 
 def mp_card_header(marketplace: str):
+    # Retained for backward compatibility with the styling helpers above;
+    # no longer used now that marketplaces live in sidebar expanders.
     color = BRAND_COLORS[marketplace]
     icon = BRAND_ICONS[marketplace]
     st.markdown(
@@ -856,17 +932,15 @@ def mp_card_header(marketplace: str):
 
 def readiness_line(mp_file, inv_file, extra_ok=True):
     if mp_file and inv_file and extra_ok:
-        st.markdown('<span class="status-badge-ok">✅ Ready to validate</span>', unsafe_allow_html=True)
+        st.markdown('<span class="badge badge-ok">✅ Ready</span>', unsafe_allow_html=True)
     elif mp_file or inv_file:
         missing = []
         if not mp_file:
             missing.append("MP file")
         if not inv_file:
             missing.append("inventory file")
-        st.markdown(
-            f'<span class="status-badge-missing">⚠️ Missing: {", ".join(missing)}</span>',
-            unsafe_allow_html=True,
-        )
+        st.markdown(f'<span class="badge badge-missing">⚠️ Missing: {", ".join(missing)}</span>',
+                    unsafe_allow_html=True)
     else:
         st.caption("Not uploaded — this marketplace will be skipped.")
 
@@ -876,367 +950,581 @@ def readiness_line_multi(parts):
     parts: list of (label, is_present) tuples."""
     missing = [label for label, present in parts if not present]
     if not missing:
-        st.markdown('<span class="status-badge-ok">✅ Ready to validate</span>', unsafe_allow_html=True)
+        st.markdown('<span class="badge badge-ok">✅ Ready</span>', unsafe_allow_html=True)
     elif len(missing) < len(parts):
-        st.markdown(
-            f'<span class="status-badge-missing">⚠️ Missing: {", ".join(missing)}</span>',
-            unsafe_allow_html=True,
-        )
+        st.markdown(f'<span class="badge badge-missing">⚠️ Missing: {", ".join(missing)}</span>',
+                    unsafe_allow_html=True)
     else:
         st.caption("Not uploaded — this marketplace will be skipped.")
 
 
-st.title("📊 Multi-Marketplace Stock Validation")
-st.caption("Lazada · Shopee · TikTok · Zalora · Shopify — upload each pair of files, get one colour-coded workbook.")
+# ----------------------------------------------------------------------------
+# Sidebar — navigation, country, marketplace uploads, reference files
+# ----------------------------------------------------------------------------
+with st.sidebar:
+    st.markdown("### 📊 Stock Validation")
+    st.markdown('<div class="sidebar-eyebrow">Select Country</div>', unsafe_allow_html=True)
+    country = st.selectbox("Country", ["SG", "MY", "PH"], label_visibility="collapsed", key="country_select")
 
-with st.container():
-    st.markdown(
-        '<span class="legend-chip" style="background:#C6EFCE;color:#375623;">✅ TRUE / Match</span>'
-        '<span class="legend-chip" style="background:#FFC7CE;color:#9C0006;">❌ IMPACT / Mismatch</span>'
-        '<span class="legend-chip" style="background:#FFEB9C;color:#7D4800;">🟠 UPDATE 0</span>'
-        '<span class="legend-chip" style="background:#D9D9D9;color:#595959;">⬜ NOT FOUND</span>',
-        unsafe_allow_html=True,
-    )
+    brand_name = st.text_input("Brand / Shop name", value="My Shop", key="brand_name_input")
 
-st.write("")
-brand_name = st.text_input("Brand / Shop name (shown on the summary tab)", value="My Shop")
+    st.markdown("---")
+    st.markdown('<div class="sidebar-eyebrow">Marketplace Uploads</div>', unsafe_allow_html=True)
 
-st.markdown("### 1️⃣ Marketplace pairs")
-st.caption("Each marketplace needs BOTH its MP file and its inventory (StockValidation) file to run.")
+    # No bulk-ZIP upload — every marketplace has individual upload buttons only.
+    bulk_zip_map = {}
 
-# No global bulk-ZIP upload — each slot below still accepts a ZIP individually
-# (resolve_bytes/slot_present will extract + classify it), this dict just
-# means there's no shared cross-slot ZIP to fall back to.
-bulk_zip_map = {}
+    with st.expander("🛍️ Lazada", expanded=False):
+        lazada_mp_file = st.file_uploader("Lazada MP file", type=["xlsx"], key="lazada_mp")
+        lazada_inv_file = st.file_uploader("Lazada inventory file", type=["csv"], key="lazada_inv")
+        readiness_line(bool(lazada_mp_file), bool(lazada_inv_file))
 
-row1 = st.columns(3)
-row2 = st.columns(2)
+    with st.expander("🧡 Shopee", expanded=False):
+        shopee_mp_file = st.file_uploader("Shopee MP file", type=["xlsx"], key="shopee_mp")
+        tc_shopee_inv_file = st.file_uploader("TC Shopee inventory file", type=["csv"], key="tc_shopee_inv")
+        readiness_line(bool(shopee_mp_file), bool(tc_shopee_inv_file))
 
-with row1[0]:
-    with st.container(border=True):
-        mp_card_header("Lazada")
-        lazada_mp_file = st.file_uploader("Lazada MP file", type=["xlsx", "zip"], key="lazada_mp")
-        lazada_inv_file = st.file_uploader("Lazada inventory file", type=["csv", "zip"], key="lazada_inv")
-        readiness_line(
-            slot_present(lazada_mp_file, "Lazada", "stock_price", bulk_zip_map),
-            slot_present(lazada_inv_file, "Lazada", "stock_validation", bulk_zip_map),
-        )
-
-with row1[1]:
-    with st.container(border=True):
-        mp_card_header("Shopee")
-        shopee_mp_file = st.file_uploader("Shopee MP file", type=["xlsx", "zip"], key="shopee_mp")
-        tc_shopee_inv_file = st.file_uploader("TC Shopee inventory file", type=["csv", "zip"], key="tc_shopee_inv")
-        readiness_line(
-            slot_present(shopee_mp_file, "Shopee", "mass_update", bulk_zip_map),
-            slot_present(tc_shopee_inv_file, "Shopee", "stock_validation", bulk_zip_map),
-        )
-
-with row1[2]:
-    with st.container(border=True):
-        mp_card_header("TikTok")
+    with st.expander("🎵 TikTok", expanded=False):
         tiktok_active_file = st.file_uploader(
-            "TikTok Active Batch Edit Report",
-            type=["xlsx", "zip"], key="tiktok_active")
+            "TikTok Active Batch Edit Report", type=["xlsx"], key="tiktok_active")
         tiktok_inactive_file = st.file_uploader(
-            "TikTok Inactive Batch Edit Report",
-            type=["xlsx", "zip"], key="tiktok_inactive")
-        if not tiktok_active_file and ("TikTok", "batch_edit_active") in bulk_zip_map:
-            st.caption("✅ TikTok Active Batch Edit found in the bulk ZIP.")
-        if not tiktok_inactive_file and ("TikTok", "batch_edit_inactive") in bulk_zip_map:
-            st.caption("✅ TikTok Inactive Batch Edit found in the bulk ZIP.")
-        tiktok_inv_file = st.file_uploader("Tiktok inventory file", type=["csv", "zip"], key="tiktok_inv")
+            "TikTok Inactive Batch Edit Report", type=["xlsx"], key="tiktok_inactive")
+        tiktok_inv_file = st.file_uploader("TikTok inventory file", type=["csv"], key="tiktok_inv")
         readiness_line_multi([
-            ("Active Batch Edit", slot_present(tiktok_active_file, "TikTok", "batch_edit_active", bulk_zip_map)),
-            ("Inactive Batch Edit", slot_present(tiktok_inactive_file, "TikTok", "batch_edit_inactive", bulk_zip_map)),
-            ("inventory file", slot_present(tiktok_inv_file, "TikTok", "stock_validation", bulk_zip_map)),
+            ("Active Batch Edit", bool(tiktok_active_file)),
+            ("Inactive Batch Edit", bool(tiktok_inactive_file)),
+            ("inventory file", bool(tiktok_inv_file)),
         ])
 
-with row2[0]:
-    with st.container(border=True):
-        mp_card_header("Zalora")
-        zalora_mp_file = st.file_uploader("Zalora MP file (SellerStockTemplate)", type=["xlsx", "zip"], key="zalora_mp")
-        zalora_inv_file = st.file_uploader("Zalora inventory file", type=["csv", "zip"], key="zalora_inv")
+    with st.expander("👗 Zalora", expanded=False):
+        zalora_mp_file = st.file_uploader("Zalora MP file (SellerStockTemplate)", type=["xlsx"], key="zalora_mp")
+        zalora_inv_file = st.file_uploader("Zalora inventory file", type=["csv"], key="zalora_inv")
         zalora_status_file = st.file_uploader(
-            "Zalora Status file (optional, SellerStatusTemplate)", type=["xlsx", "zip"], key="zalora_status")
-        if not zalora_status_file and ("Zalora", "status_file") in bulk_zip_map:
-            st.caption("✅ Zalora Status file found in the bulk ZIP.")
-        readiness_line(
-            slot_present(zalora_mp_file, "Zalora", "stock_file", bulk_zip_map),
-            slot_present(zalora_inv_file, "Zalora", "stock_validation", bulk_zip_map),
-        )
+            "Zalora Status file (optional, SellerStatusTemplate)", type=["xlsx"], key="zalora_status")
+        readiness_line(bool(zalora_mp_file), bool(zalora_inv_file))
 
-with row2[1]:
-    with st.container(border=True):
-        mp_card_header("Shopify")
-        shopify_mp_file = st.file_uploader("Shopify MP file (Export inventory CSV)", type=["csv", "xlsx", "zip"], key="shopify_mp")
-        shopify_inv_file = st.file_uploader("Shopify inventory file", type=["csv", "zip"], key="shopify_inv")
-        readiness_line(shopify_mp_file, shopify_inv_file)
+    with st.expander("🟢 Shopify", expanded=False):
+        shopify_mp_file = st.file_uploader(
+            "Shopify MP file (Export inventory CSV)", type=["csv", "xlsx"], key="shopify_mp")
+        shopify_inv_file = st.file_uploader("Shopify inventory file", type=["csv"], key="shopify_inv")
+        readiness_line(bool(shopify_mp_file), bool(shopify_inv_file))
 
-st.markdown("### 2️⃣ Warehouse & Product Master (optional)")
-with st.container(border=True):
-    st.markdown('<div class="mp-card-header" style="background:#1F3864;">📦 Warehouse & Product Master</div>',
-                unsafe_allow_html=True)
-    wh_row1 = st.columns(3)
-    with wh_row1[0]:
-        soh_file = st.file_uploader("SOH", type=["xls", "zip"], key="soh")
-    with wh_row1[1]:
-        warehouse_report_file = st.file_uploader("Warehouse report", type=["csv", "xlsx", "zip"], key="warehouse_report")
+    st.markdown("---")
+    st.markdown('<div class="sidebar-eyebrow">Reference Files</div>', unsafe_allow_html=True)
+
+    with st.expander("📋 Product Master", expanded=False):
+        product_master_file = st.file_uploader("Product Master file", type=["csv", "xlsx"], key="product_master")
+        st.caption("SKU + Name columns. Used to gate SOH / DTC / Warehouse SKUs before validation.")
+        mp_report_file = st.file_uploader("MP Report file (optional)", type=["csv", "xlsx"], key="mp_report")
+        st.caption("Any SKU list — checked against Product Master to flag SKUs missing from the master.")
+
+    with st.expander("🏬 SOH Report", expanded=False):
+        soh_file = st.file_uploader("SOH file", type=["xls"], key="soh")
+
+    with st.expander("🏭 Warehouse Report", expanded=False):
+        warehouse_report_file = st.file_uploader("Warehouse report", type=["csv", "xlsx"], key="warehouse_report")
         st.caption("Compared against SOH by SKU.")
-    with wh_row1[2]:
-        dtc_inv_file = st.file_uploader("DTC inventory file", type=["csv", "zip"], key="dtc_inv")
-        st.caption("Compared against SOH + cross-checked with Product Master by SKU.")
-        readiness_line(soh_file, dtc_inv_file)
+        dtc_inv_file = st.file_uploader("DTC inventory file", type=["csv"], key="dtc_inv")
+        st.caption("Compared against SOH + cross-checked with Product Master.")
 
-    wh_row2 = st.columns(2)
-    with wh_row2[0]:
-        product_master_file = st.file_uploader("Product Master file", type=["csv", "xlsx", "zip"], key="product_master")
-    with wh_row2[1]:
-        mp_report_file = st.file_uploader("MP Report file", type=["csv", "xlsx", "zip"], key="mp_report")
-        st.caption("Checked against Product Master by SKU — needs Product Master uploaded too.")
-
-with st.expander("ℹ️ Notes on file formats", expanded=False):
-    st.markdown(
-        """
+    with st.expander("ℹ️ File format notes", expanded=False):
+        st.markdown(
+            """
 - **Lazada MP file** — the `pricestock...xlsx` Stock & Price export
 - **Shopee MP file** — the `mass_update_sales_info...xlsx` export
-- **TikTok Active Batch Edit Report / Inactive Batch Edit Report** — both required; these
-  two exports together are the source of TikTok stock (no separate "main" batch edit file).
-  Each SKU's `TikTok_Status` is set to Active or Inactive based on which file it's found in.
-- **Zalora MP file** — `SellerStockTemplate...xlsx`; optional Status file adds an active/inactive column
-- **Shopify MP file** — the standard Shopify "Export inventory" CSV (`SKU` + `Available` columns)
-- **DTC inventory file** — StockValidation-style CSV for your own DTC site; validated against the
-  SOH warehouse file (upload that too)
-- **Warehouse report** — a second warehouse stock source (SKU + quantity, any column names);
-  compared directly against SOH, SKU by SKU
-- **Inventory files** — the StockValidation CSV for that marketplace (`Seller SKU` + `Expected Stock` columns)
-- **SOH** — `SOHbySKU...xls` warehouse export (shown as reference only in this version)
-- **Product Master file** — any file with a SKU column and a Name column; adds a `Product Name`
-  column to marketplace reports, doesn't affect matching
-- **MP Report file** — any file with a SKU column; checked against the Product Master's SKU list
-  to flag which SKUs are missing from the master
+- **TikTok Active/Inactive Batch Edit** — both required; together they're the TikTok stock source
+- **Zalora MP file** — `SellerStockTemplate...xlsx`; optional Status file adds active/inactive
+- **Shopify MP file** — the standard Shopify "Export inventory" CSV
+- **DTC inventory file** — validated against the SOH warehouse file
+- **SOH** — `SOHbySKU...xls` warehouse export
+- **Product Master** — SKU + Name columns
+- **MP Report** — any SKU list, checked against Product Master
+            """
+        )
 
-Only fill in the marketplaces you want validated — any subset works.
-        """
-    )
 
-any_uploaded = any([
-    lazada_mp_file, shopee_mp_file, tiktok_active_file, tiktok_inactive_file, zalora_mp_file,
-    shopify_mp_file, dtc_inv_file, lazada_inv_file, tc_shopee_inv_file, tiktok_inv_file,
-    zalora_inv_file, shopify_inv_file, soh_file, product_master_file, mp_report_file,
-    warehouse_report_file, bool(bulk_zip_map),
-])
+# ----------------------------------------------------------------------------
+# Main header
+# ----------------------------------------------------------------------------
+st.markdown('<div class="app-header-bar"><h1>Multi-Marketplace Stock Validation</h1></div>',
+            unsafe_allow_html=True)
+st.markdown(
+    f'<div class="app-subheader">Country: {country} | Upload files from the sidebar and click Run Validation.</div>',
+    unsafe_allow_html=True,
+)
 
-if any_uploaded:
-    name_lookup = {}
-    pm_bytes = resolve_bytes(product_master_file, "Warehouse", "product_master", bulk_zip_map) \
-        if product_master_file else bulk_zip_map.get(("Warehouse", "product_master"))
-    pm_name = product_master_file.name if product_master_file else "product_master.xlsx"
-    if pm_bytes:
-        name_lookup = parse_product_master(pm_bytes, pm_name)
-        if name_lookup:
-            st.success(f"Product Master loaded — {len(name_lookup)} SKUs mapped to product names.")
+tab_status, tab_downloads, tab_saved = st.tabs(["Status Validation", "Downloads", "Saved Reports"])
+
+
+# ----------------------------------------------------------------------------
+# Product Master lookup — computed once, used by status display + validation
+# ----------------------------------------------------------------------------
+pm_bytes = resolve_bytes(product_master_file, "Warehouse", "product_master", bulk_zip_map) \
+    if product_master_file else None
+pm_name = product_master_file.name if product_master_file else "product_master.xlsx"
+name_lookup = parse_product_master(pm_bytes, pm_name) if pm_bytes else {}
+
+
+def compute_aggregate_counts(marketplace_data, warehouse_vs_soh_df=None):
+    """Roll every validated marketplace (+ Warehouse vs SOH, if present) into
+    one combined set of KPI numbers for the dashboard cards."""
+    all_dfs = [df for df in marketplace_data.values()]
+    if warehouse_vs_soh_df is not None:
+        all_dfs.append(warehouse_vs_soh_df)
+    if not all_dfs:
+        return dict(total=0, matches=0, mismatches=0, missing=0, update0=0, not_found=0)
+    combined = pd.concat(all_dfs, ignore_index=True, sort=False)
+    total = len(combined)
+    matches = int((combined["Status"] == "Match").sum())
+    mismatches = int((combined["Status"] == "Mismatch").sum())
+    update0 = int((combined["Remark"] == "UPDATE 0").sum())
+    not_found = int(combined["Remark"].isin(NOT_FOUND_LABELS.values()).sum())
+    missing_val = int((combined["Remark"] == MISSING_IN_VALIDATION_LABEL).sum())
+    return dict(total=total, matches=matches, mismatches=mismatches,
+                missing=not_found + missing_val, update0=update0, not_found=not_found)
+
+
+def run_validation():
+    """Runs the exact same validation pipeline as before — parsing, Product
+    Master gating, and workbook generation are all untouched. Results are
+    stashed in session_state (instead of rendered inline) so the Downloads
+    and Saved Reports tabs can access them after this rerun completes."""
+    marketplace_data = {}
+
+    lazada_inv_bytes = resolve_bytes(lazada_inv_file, "Lazada", "stock_validation", bulk_zip_map)
+    lazada_mp_bytes = resolve_bytes(lazada_mp_file, "Lazada", "stock_price", bulk_zip_map)
+    if lazada_inv_bytes and lazada_mp_bytes:
+        stockval_df = parse_stock_validation_csv(lazada_inv_bytes)
+        sp_lookup = parse_lazada_stock_price(lazada_mp_bytes)
+        df = build_marketplace_df(stockval_df, sp_lookup, "Lazada")
+        df = append_extra_mp_only_skus(df, sp_lookup)
+        marketplace_data["Lazada"] = apply_product_names(df, name_lookup)
+
+    shopee_inv_bytes = resolve_bytes(tc_shopee_inv_file, "Shopee", "stock_validation", bulk_zip_map)
+    shopee_mp_bytes = resolve_bytes(shopee_mp_file, "Shopee", "mass_update", bulk_zip_map)
+    if shopee_inv_bytes and shopee_mp_bytes:
+        stockval_df = parse_stock_validation_csv(shopee_inv_bytes)
+        sp_lookup = parse_shopee_mass_update(shopee_mp_bytes)
+        df = build_marketplace_df(stockval_df, sp_lookup, "Shopee")
+        df = append_extra_mp_only_skus(df, sp_lookup)
+        marketplace_data["Shopee"] = apply_product_names(df, name_lookup)
+
+    tiktok_inv_bytes = resolve_bytes(tiktok_inv_file, "TikTok", "stock_validation", bulk_zip_map)
+    tiktok_active_bytes = resolve_bytes(tiktok_active_file, "TikTok", "batch_edit_active", bulk_zip_map)
+    tiktok_inactive_bytes = resolve_bytes(tiktok_inactive_file, "TikTok", "batch_edit_inactive", bulk_zip_map)
+
+    if tiktok_inv_bytes and tiktok_active_bytes and tiktok_inactive_bytes:
+        stockval_df = parse_stock_validation_csv(tiktok_inv_bytes)
+        active_lookup = parse_tiktok_batch_edit(tiktok_active_bytes)
+        inactive_lookup = parse_tiktok_batch_edit(tiktok_inactive_bytes)
+
+        overlap = set(active_lookup) & set(inactive_lookup)
+        if overlap:
+            st.warning(f"TikTok: {len(overlap)} SKU(s) appear in both the Active and Inactive "
+                       f"batch edit files — using the Inactive file's quantity and status for these.")
+
+        # Active + Inactive together are the full TikTok stock source now.
+        sp_lookup = {**active_lookup, **inactive_lookup}
+        tiktok_status_lookup = build_tiktok_status_lookup(active_lookup, inactive_lookup)
+
+        df = build_marketplace_df(stockval_df, sp_lookup, "TikTok", tiktok_status_lookup)
+        df = append_extra_mp_only_skus(df, sp_lookup, tiktok_status_lookup)
+        marketplace_data["TikTok"] = apply_product_names(df, name_lookup)
+    elif tiktok_inv_bytes or tiktok_active_bytes or tiktok_inactive_bytes:
+        missing = []
+        if not tiktok_active_bytes:
+            missing.append("Active Batch Edit Report")
+        if not tiktok_inactive_bytes:
+            missing.append("Inactive Batch Edit Report")
+        if not tiktok_inv_bytes:
+            missing.append("inventory file")
+        st.warning("TikTok: skipped — missing " + ", ".join(missing) + ".")
+
+    zalora_inv_bytes = resolve_bytes(zalora_inv_file, "Zalora", "stock_validation", bulk_zip_map)
+    zalora_mp_bytes = resolve_bytes(zalora_mp_file, "Zalora", "stock_file", bulk_zip_map)
+    if zalora_inv_bytes and zalora_mp_bytes:
+        stockval_df = parse_stock_validation_csv(zalora_inv_bytes)
+        sp_lookup = parse_zalora_stock_file(zalora_mp_bytes)
+        zalora_status_bytes = resolve_bytes(zalora_status_file, "Zalora", "status_file", bulk_zip_map)
+        status_lookup = parse_zalora_status_file(zalora_status_bytes) if zalora_status_bytes else None
+        df = build_marketplace_df(stockval_df, sp_lookup, "Zalora", status_lookup)
+        df = append_extra_mp_only_skus(df, sp_lookup, status_lookup)
+        marketplace_data["Zalora"] = apply_product_names(df, name_lookup)
+
+    shopify_sp_lookup = None
+    shopify_mp_bytes = resolve_bytes(shopify_mp_file, "Shopify", "shopify_export", bulk_zip_map) \
+        if shopify_mp_file else None
+    if shopify_mp_bytes:
+        shopify_sp_lookup = parse_shopify_export(shopify_mp_bytes, shopify_mp_file.name)
+        if not shopify_sp_lookup:
+            st.warning("Shopify MP file uploaded but no SKU/Available columns could be detected.")
+
+    shopify_inv_bytes = resolve_bytes(shopify_inv_file, "Shopify", "stock_validation", bulk_zip_map) \
+        if shopify_inv_file else None
+    if shopify_inv_bytes and shopify_sp_lookup:
+        stockval_df = parse_stock_validation_csv(shopify_inv_bytes)
+        df = build_marketplace_df(stockval_df, shopify_sp_lookup, "Shopify")
+        df = append_extra_mp_only_skus(df, shopify_sp_lookup)
+        marketplace_data["Shopify"] = apply_product_names(df, name_lookup)
+
+    missing_pm_rows = []  # collects rows skipped from SOH / DTC / Warehouse for the Missing-in-PM report
+
+    soh_lookup = None
+    soh_bytes = resolve_bytes(soh_file, "Warehouse", "soh", bulk_zip_map) if soh_file else None
+    if soh_bytes:
+        raw_soh_lookup = parse_soh(soh_bytes)
+        soh_lookup, soh_missing = filter_dict_by_product_master(raw_soh_lookup, "SOH Report", name_lookup)
+        missing_pm_rows.extend(soh_missing)
+        if soh_missing and name_lookup:
+            st.info(f"SOH Report: {len(soh_missing)} SKU(s) not found in Product Master — skipped from validation.")
+
+    dtc_inv_bytes = resolve_bytes(dtc_inv_file, "DTC", "stock_validation", bulk_zip_map)
+    if dtc_inv_bytes and soh_lookup:
+        raw_stockval_df = parse_stock_validation_csv(dtc_inv_bytes)
+        stockval_df, dtc_missing_df = filter_df_by_product_master(raw_stockval_df, "DTC Inventory Report", name_lookup)
+        if not dtc_missing_df.empty:
+            missing_pm_rows.extend(dtc_missing_df.to_dict("records"))
+            st.info(f"DTC Inventory Report: {len(dtc_missing_df)} SKU(s) not found in Product Master — skipped from validation.")
+        df = build_marketplace_df(stockval_df, soh_lookup, "DTC")
+        df = append_extra_mp_only_skus(df, soh_lookup)
+        marketplace_data["DTC"] = apply_product_master_check(df, name_lookup)
+    elif dtc_inv_bytes and not soh_lookup:
+        st.warning("DTC inventory file found, but the SOH warehouse file is needed to validate against — skipping DTC.")
+
+    warehouse_df = None
+    warehouse_vs_soh_df = None
+    wh_report_bytes = resolve_bytes(warehouse_report_file, "Warehouse", "all_report", bulk_zip_map) \
+        if warehouse_report_file else None
+    if wh_report_bytes and soh_lookup:
+        raw_wh_lookup = parse_warehouse_report(wh_report_bytes, warehouse_report_file.name if warehouse_report_file else "warehouse.csv")
+        if not raw_wh_lookup:
+            st.warning("Warehouse report found but no SKU/quantity columns could be detected — skipping.")
         else:
-            st.warning("Product Master file found but no SKU/Name columns could be detected — skipping.")
+            wh_lookup, wh_missing = filter_dict_by_product_master(raw_wh_lookup, "Warehouse Report", name_lookup)
+            if wh_missing:
+                missing_pm_rows.extend(wh_missing)
+                st.info(f"Warehouse Report: {len(wh_missing)} SKU(s) not found in Product Master — skipped from validation.")
+            warehouse_vs_soh_df = apply_product_master_check(build_warehouse_vs_soh_df(wh_lookup, soh_lookup), name_lookup)
+    elif wh_report_bytes and not soh_lookup:
+        st.warning("Warehouse report found, but SOH is needed to compare against — skipping.")
+    elif soh_lookup and not wh_report_bytes:
+        rows = [
+            {"Seller SKU": sku, "Expected Stock": qty, "SP_Quantity": None,
+             "Status": "Mismatch", "Remark": "NOT FOUND"}
+            for sku, qty in soh_lookup.items()
+        ]
+        if rows:
+            warehouse_df = apply_product_master_check(pd.DataFrame(rows), name_lookup)
+            st.info(
+                "SOH file loaded without a Warehouse report — showing warehouse stock as reference only "
+                "(no comparison available for this tab)."
+            )
 
-    if st.button("🚀 Run Validation", type="primary"):
-        marketplace_data = {}
+    missing_pm_df = pd.DataFrame(missing_pm_rows) if missing_pm_rows else None
+    if missing_pm_rows and not name_lookup:
+        # Shouldn't happen (filtering only triggers when name_lookup exists) but guard just in case.
+        missing_pm_df = None
 
-        lazada_inv_bytes = resolve_bytes(lazada_inv_file, "Lazada", "stock_validation", bulk_zip_map)
-        lazada_mp_bytes = resolve_bytes(lazada_mp_file, "Lazada", "stock_price", bulk_zip_map)
-        if lazada_inv_bytes and lazada_mp_bytes:
-            stockval_df = parse_stock_validation_csv(lazada_inv_bytes)
-            sp_lookup = parse_lazada_stock_price(lazada_mp_bytes)
-            df = build_marketplace_df(stockval_df, sp_lookup, "Lazada")
-            df = append_extra_mp_only_skus(df, sp_lookup)
-            marketplace_data["Lazada"] = apply_product_names(df, name_lookup)
+    mp_vs_pm_df = None
+    mp_report_bytes = resolve_bytes(mp_report_file, "Warehouse", "mp_report", bulk_zip_map) \
+        if mp_report_file else None
+    if mp_report_bytes and name_lookup:
+        mp_df = parse_mp_report(mp_report_bytes, mp_report_file.name if mp_report_file else "mp_report.xlsx")
+        if mp_df.empty:
+            st.warning("MP Report file found but no SKU column could be detected — skipping.")
+        else:
+            mp_vs_pm_df = build_mp_vs_product_master_df(mp_df, name_lookup)
+    elif mp_report_bytes and not name_lookup:
+        st.warning("MP Report file found, but Product Master is needed to compare against — skipping.")
 
-        shopee_inv_bytes = resolve_bytes(tc_shopee_inv_file, "Shopee", "stock_validation", bulk_zip_map)
-        shopee_mp_bytes = resolve_bytes(shopee_mp_file, "Shopee", "mass_update", bulk_zip_map)
-        if shopee_inv_bytes and shopee_mp_bytes:
-            stockval_df = parse_stock_validation_csv(shopee_inv_bytes)
-            sp_lookup = parse_shopee_mass_update(shopee_mp_bytes)
-            df = build_marketplace_df(stockval_df, sp_lookup, "Shopee")
-            df = append_extra_mp_only_skus(df, sp_lookup)
-            marketplace_data["Shopee"] = apply_product_names(df, name_lookup)
+    pairs_to_check = [
+        ("Lazada", bool(lazada_mp_bytes), bool(lazada_inv_bytes)),
+        ("Shopee", bool(shopee_mp_bytes), bool(shopee_inv_bytes)),
+        ("Zalora", bool(zalora_mp_bytes), bool(zalora_inv_bytes)),
+        ("Shopify", bool(shopify_mp_bytes), bool(shopify_inv_bytes)),
+    ]
+    missing_pairs = []
+    for name, mp_ok, inv_ok in pairs_to_check:
+        if mp_ok and not inv_ok:
+            missing_pairs.append(f"{name} MP file found without its inventory file")
+        if inv_ok and not mp_ok:
+            missing_pairs.append(f"{name} inventory file found without its MP file")
+    if missing_pairs:
+        st.warning("Skipped incomplete pairs: " + "; ".join(missing_pairs))
 
-        tiktok_inv_bytes = resolve_bytes(tiktok_inv_file, "TikTok", "stock_validation", bulk_zip_map)
-        tiktok_active_bytes = resolve_bytes(tiktok_active_file, "TikTok", "batch_edit_active", bulk_zip_map)
-        tiktok_inactive_bytes = resolve_bytes(tiktok_inactive_file, "TikTok", "batch_edit_inactive", bulk_zip_map)
+    if (not marketplace_data and warehouse_df is None and mp_vs_pm_df is None
+            and warehouse_vs_soh_df is None and missing_pm_df is None):
+        st.error(
+            "No complete pair was found. Each marketplace needs BOTH its "
+            "MP file AND its inventory file uploaded (DTC needs the SOH warehouse file; "
+            "MP Report needs Product Master; Warehouse report needs SOH)."
+        )
+        st.session_state["validation_done"] = False
+        return
 
-        if tiktok_inv_bytes and tiktok_active_bytes and tiktok_inactive_bytes:
-            stockval_df = parse_stock_validation_csv(tiktok_inv_bytes)
-            active_lookup = parse_tiktok_batch_edit(tiktok_active_bytes)
-            inactive_lookup = parse_tiktok_batch_edit(tiktok_inactive_bytes)
+    wb = build_workbook(marketplace_data, warehouse_df, brand_name, mp_vs_pm_df, warehouse_vs_soh_df, missing_pm_df)
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
 
-            overlap = set(active_lookup) & set(inactive_lookup)
-            if overlap:
-                st.warning(f"TikTok: {len(overlap)} SKU(s) appear in both the Active and Inactive "
-                           f"batch edit files — using the Inactive file's quantity and status for these.")
+    suffix = "Multi" if len(marketplace_data) > 1 else (list(marketplace_data)[0] if marketplace_data else "Report")
+    filename = f"Stock_Validation_{suffix}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
 
-            # Active + Inactive together are the full TikTok stock source now.
-            sp_lookup = {**active_lookup, **inactive_lookup}
-            tiktok_status_lookup = build_tiktok_status_lookup(active_lookup, inactive_lookup)
+    # Save to the Reports folder so it shows up under Saved Reports.
+    os.makedirs(REPORTS_DIR, exist_ok=True)
+    with open(os.path.join(REPORTS_DIR, filename), "wb") as f:
+        f.write(buf.getvalue())
 
-            df = build_marketplace_df(stockval_df, sp_lookup, "TikTok", tiktok_status_lookup)
-            df = append_extra_mp_only_skus(df, sp_lookup, tiktok_status_lookup)
-            marketplace_data["TikTok"] = apply_product_names(df, name_lookup)
-        elif tiktok_inv_bytes or tiktok_active_bytes or tiktok_inactive_bytes:
-            missing = []
-            if not tiktok_active_bytes:
-                missing.append("Active Batch Edit Report")
-            if not tiktok_inactive_bytes:
-                missing.append("Inactive Batch Edit Report")
-            if not tiktok_inv_bytes:
-                missing.append("inventory file")
-            st.warning("TikTok: skipped — missing " + ", ".join(missing) + ".")
+    st.session_state["validation_done"] = True
+    st.session_state["marketplace_data"] = marketplace_data
+    st.session_state["warehouse_df"] = warehouse_df
+    st.session_state["warehouse_vs_soh_df"] = warehouse_vs_soh_df
+    st.session_state["mp_vs_pm_df"] = mp_vs_pm_df
+    st.session_state["missing_pm_df"] = missing_pm_df
+    st.session_state["wb_bytes"] = buf.getvalue()
+    st.session_state["report_filename"] = filename
+    st.session_state["brand_name"] = brand_name
+    st.success("Validation complete!")
 
-        zalora_inv_bytes = resolve_bytes(zalora_inv_file, "Zalora", "stock_validation", bulk_zip_map)
-        zalora_mp_bytes = resolve_bytes(zalora_mp_file, "Zalora", "stock_file", bulk_zip_map)
-        if zalora_inv_bytes and zalora_mp_bytes:
-            stockval_df = parse_stock_validation_csv(zalora_inv_bytes)
-            sp_lookup = parse_zalora_stock_file(zalora_mp_bytes)
-            zalora_status_bytes = resolve_bytes(zalora_status_file, "Zalora", "status_file", bulk_zip_map)
-            status_lookup = parse_zalora_status_file(zalora_status_bytes) if zalora_status_bytes else None
-            df = build_marketplace_df(stockval_df, sp_lookup, "Zalora", status_lookup)
-            df = append_extra_mp_only_skus(df, sp_lookup, status_lookup)
-            marketplace_data["Zalora"] = apply_product_names(df, name_lookup)
 
-        shopify_sp_lookup = None
-        shopify_mp_bytes = resolve_bytes(shopify_mp_file, "Shopify", "shopify_export", bulk_zip_map) \
-            if shopify_mp_file else None
-        if shopify_mp_bytes:
-            shopify_sp_lookup = parse_shopify_export(shopify_mp_bytes, shopify_mp_file.name)
-            if not shopify_sp_lookup:
-                st.warning("Shopify MP file uploaded but no SKU/Available columns could be detected.")
+# ----------------------------------------------------------------------------
+# Extra downloadable reports — built purely from already-computed results,
+# reusing the existing write_df_sheet / compute_counts / add_summary_block
+# helpers as-is (no changes to how any sheet is styled or calculated).
+# ----------------------------------------------------------------------------
+def build_mismatch_only_workbook(marketplace_data, warehouse_vs_soh_df=None):
+    wb2 = Workbook()
+    wb2.remove(wb2.active)
+    any_sheet = False
+    for marketplace in MARKETPLACE_ORDER:
+        if marketplace in marketplace_data:
+            mism = marketplace_data[marketplace]
+            mism = mism[mism["Status"] == "Mismatch"]
+            if not mism.empty:
+                write_df_sheet(wb2, f"{marketplace} Mismatches", mism)
+                any_sheet = True
+    if warehouse_vs_soh_df is not None:
+        mism = warehouse_vs_soh_df[warehouse_vs_soh_df["Status"] == "Mismatch"]
+        if not mism.empty:
+            write_df_sheet(wb2, "Warehouse vs SOH Mismatches", mism)
+            any_sheet = True
+    if not any_sheet:
+        wb2.create_sheet("Mismatches").append(["No mismatches found"])
+    return wb2
 
-        shopify_inv_bytes = resolve_bytes(shopify_inv_file, "Shopify", "stock_validation", bulk_zip_map) \
-            if shopify_inv_file else None
-        if shopify_inv_bytes and shopify_sp_lookup:
-            stockval_df = parse_stock_validation_csv(shopify_inv_bytes)
-            df = build_marketplace_df(stockval_df, shopify_sp_lookup, "Shopify")
-            df = append_extra_mp_only_skus(df, shopify_sp_lookup)
-            marketplace_data["Shopify"] = apply_product_names(df, name_lookup)
 
-        missing_pm_rows = []  # collects rows skipped from SOH / DTC / Warehouse for the Missing-in-PM report
+def build_summary_only_workbook(marketplace_data, warehouse_vs_soh_df=None, brand_name="Shop"):
+    wb2 = Workbook()
+    ws = wb2.active
+    ws.title = "Summary"
+    ws.column_dimensions["A"].width = 20
+    for col in "BCDEFG":
+        ws.column_dimensions[col].width = 16
+    ws.cell(row=1, column=1, value=f"Summary — {brand_name}").font = Font(name="Arial", size=14, bold=True)
+    row_cursor = 3
+    for marketplace in MARKETPLACE_ORDER:
+        if marketplace in marketplace_data:
+            counts = compute_counts(marketplace_data[marketplace], NOT_FOUND_LABELS[marketplace])
+            row_cursor = add_summary_block(ws, row_cursor, marketplace.upper(), counts)
+    if warehouse_vs_soh_df is not None:
+        counts = compute_counts(warehouse_vs_soh_df, "NOT IN SOH")
+        row_cursor = add_summary_block(ws, row_cursor, "WAREHOUSE vs SOH", counts)
+    return wb2
 
-        soh_lookup = None
-        soh_bytes = resolve_bytes(soh_file, "Warehouse", "soh", bulk_zip_map) if soh_file else bulk_zip_map.get(("Warehouse", "soh"))
-        if soh_bytes:
-            raw_soh_lookup = parse_soh(soh_bytes)
-            soh_lookup, soh_missing = filter_dict_by_product_master(raw_soh_lookup, "SOH Report", name_lookup)
-            missing_pm_rows.extend(soh_missing)
-            if soh_missing and name_lookup:
-                st.info(f"SOH Report: {len(soh_missing)} SKU(s) not found in Product Master — skipped from validation.")
 
-        dtc_inv_bytes = resolve_bytes(dtc_inv_file, "DTC", "stock_validation", bulk_zip_map)
-        if dtc_inv_bytes and soh_lookup:
-            raw_stockval_df = parse_stock_validation_csv(dtc_inv_bytes)
-            stockval_df, dtc_missing_df = filter_df_by_product_master(raw_stockval_df, "DTC Inventory Report", name_lookup)
-            if not dtc_missing_df.empty:
-                missing_pm_rows.extend(dtc_missing_df.to_dict("records"))
-                st.info(f"DTC Inventory Report: {len(dtc_missing_df)} SKU(s) not found in Product Master — skipped from validation.")
-            df = build_marketplace_df(stockval_df, soh_lookup, "DTC")
-            df = append_extra_mp_only_skus(df, soh_lookup)
-            marketplace_data["DTC"] = apply_product_master_check(df, name_lookup)
-        elif dtc_inv_bytes and not soh_lookup:
-            st.warning("DTC inventory file found, but the SOH warehouse file is needed to validate against — skipping DTC.")
+def build_missing_pm_workbook(missing_pm_df):
+    wb2 = Workbook()
+    wb2.remove(wb2.active)
+    if missing_pm_df is not None and not missing_pm_df.empty:
+        write_df_sheet(wb2, "Missing in Product Master", missing_pm_df)
+    else:
+        wb2.create_sheet("Missing in Product Master").append(
+            ["No missing SKUs — Product Master not uploaded, or every SKU matched."])
+    return wb2
 
-        warehouse_df = None
-        warehouse_vs_soh_df = None
-        wh_report_bytes = resolve_bytes(warehouse_report_file, "Warehouse", "all_report", bulk_zip_map) \
-            if warehouse_report_file else bulk_zip_map.get(("Warehouse", "all_report"))
-        if wh_report_bytes and soh_lookup:
-            raw_wh_lookup = parse_warehouse_report(wh_report_bytes, warehouse_report_file.name if warehouse_report_file else "warehouse.csv")
-            if not raw_wh_lookup:
-                st.warning("Warehouse report found but no SKU/quantity columns could be detected — skipping.")
-            else:
-                wh_lookup, wh_missing = filter_dict_by_product_master(raw_wh_lookup, "Warehouse Report", name_lookup)
-                if wh_missing:
-                    missing_pm_rows.extend(wh_missing)
-                    st.info(f"Warehouse Report: {len(wh_missing)} SKU(s) not found in Product Master — skipped from validation.")
-                warehouse_vs_soh_df = apply_product_master_check(build_warehouse_vs_soh_df(wh_lookup, soh_lookup), name_lookup)
-        elif wh_report_bytes and not soh_lookup:
-            st.warning("Warehouse report found, but SOH is needed to compare against — skipping.")
-        elif soh_lookup and not wh_report_bytes:
-            rows = [
-                {"Seller SKU": sku, "Expected Stock": qty, "SP_Quantity": None,
-                 "Status": "Mismatch", "Remark": "NOT FOUND"}
-                for sku, qty in soh_lookup.items()
-            ]
-            if rows:
-                warehouse_df = apply_product_master_check(pd.DataFrame(rows), name_lookup)
-                st.info(
-                    "SOH file loaded without a Warehouse report — showing warehouse stock as reference only "
-                    "(no comparison available for this tab)."
+
+def workbook_to_bytes(wb2):
+    buf = io.BytesIO()
+    wb2.save(buf)
+    buf.seek(0)
+    return buf.getvalue()
+
+
+# ----------------------------------------------------------------------------
+# Tab 1 — Status Validation
+# ----------------------------------------------------------------------------
+with tab_status:
+    st.markdown("#### Validation Status")
+
+    marketplace_readiness = [
+        ("Lazada", bool(lazada_mp_file) and bool(lazada_inv_file)),
+        ("Shopee", bool(shopee_mp_file) and bool(tc_shopee_inv_file)),
+        ("TikTok", bool(tiktok_active_file) and bool(tiktok_inactive_file) and bool(tiktok_inv_file)),
+        ("Zalora", bool(zalora_mp_file) and bool(zalora_inv_file)),
+        ("Shopify", bool(shopify_mp_file) and bool(shopify_inv_file)),
+    ]
+    ready_count = sum(1 for _, ready in marketplace_readiness if ready)
+
+    status_cols = st.columns(5)
+    for i, (mp, ready) in enumerate(marketplace_readiness):
+        with status_cols[i]:
+            icon = BRAND_ICONS.get(mp, "📦")
+            badge = '<span class="badge badge-ok">Uploaded</span>' if ready \
+                else '<span class="badge badge-missing">Missing</span>'
+            st.markdown(
+                f'<div class="status-card"><div class="status-card-title">{icon} {mp}</div>{badge}</div>',
+                unsafe_allow_html=True,
+            )
+
+    st.markdown("###### Progress")
+    st.progress(ready_count / len(marketplace_readiness))
+    st.caption(f"{ready_count} of {len(marketplace_readiness)} marketplaces have both required files uploaded.")
+
+    if name_lookup:
+        st.success(f"Product Master loaded — {len(name_lookup)} SKUs mapped to product names.")
+    elif product_master_file and pm_bytes and not name_lookup:
+        st.warning("Product Master file found but no SKU/Name columns could be detected.")
+
+    st.markdown("")
+    if st.button("🚀 Run Validation", type="primary", use_container_width=False):
+        run_validation()
+
+    if st.session_state.get("validation_done"):
+        st.markdown("#### Results")
+        counts = compute_aggregate_counts(
+            st.session_state.get("marketplace_data", {}),
+            st.session_state.get("warehouse_vs_soh_df"),
+        )
+        kpi_defs = [
+            ("Total SKUs", counts["total"], "#1F3864", "📦"),
+            ("Matches", counts["matches"], "#22C55E", "✔️"),
+            ("Mismatches", counts["mismatches"], "#EF4444", "❌"),
+            ("Missing SKUs", counts["missing"], "#6B7280", "❓"),
+            ("Update 0", counts["update0"], "#F59E0B", "🟠"),
+            ("Not Found", counts["not_found"], "#3B82F6", "🔎"),
+        ]
+        kpi_cols = st.columns(6)
+        for col, (label, value, color, icon) in zip(kpi_cols, kpi_defs):
+            with col:
+                st.markdown(
+                    f'<div class="kpi-card" style="--kpi-color:{color};">'
+                    f'<div class="kpi-icon">{icon}</div>'
+                    f'<div class="kpi-value">{value}</div>'
+                    f'<div class="kpi-label">{label}</div></div>',
+                    unsafe_allow_html=True,
+                )
+    else:
+        st.info("Upload files from the sidebar, then click Run Validation to see results here.")
+
+
+# ----------------------------------------------------------------------------
+# Tab 2 — Downloads
+# ----------------------------------------------------------------------------
+with tab_downloads:
+    if not st.session_state.get("validation_done"):
+        st.info("Run validation first to generate downloadable reports.")
+    else:
+        st.markdown("#### Downloads")
+        marketplace_data = st.session_state.get("marketplace_data", {})
+        warehouse_vs_soh_df = st.session_state.get("warehouse_vs_soh_df")
+        missing_pm_df = st.session_state.get("missing_pm_df")
+        report_brand = st.session_state.get("brand_name", "Shop")
+        stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+
+        dl_cols = st.columns(2)
+
+        with dl_cols[0]:
+            with st.container(border=True):
+                st.markdown("##### 📘 Validation Report")
+                st.caption("The full colour-coded workbook — one tab pair per marketplace plus summary.")
+                st.download_button(
+                    "Download",
+                    data=st.session_state["wb_bytes"],
+                    file_name=st.session_state["report_filename"],
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    use_container_width=True,
+                    key="dl_validation",
                 )
 
-        missing_pm_df = pd.DataFrame(missing_pm_rows) if missing_pm_rows else None
-        if missing_pm_rows and not name_lookup:
-            # Shouldn't happen (filtering only triggers when name_lookup exists) but guard just in case.
-            missing_pm_df = None
+        with dl_cols[1]:
+            with st.container(border=True):
+                st.markdown("##### 🚩 Mismatch Report")
+                st.caption("Every SKU flagged Mismatch across all validated marketplaces, in one file.")
+                mism_bytes = workbook_to_bytes(build_mismatch_only_workbook(marketplace_data, warehouse_vs_soh_df))
+                st.download_button(
+                    "Download",
+                    data=mism_bytes,
+                    file_name=f"Mismatch_Report_{stamp}.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    use_container_width=True,
+                    key="dl_mismatch",
+                )
 
-        mp_vs_pm_df = None
-        mp_report_bytes = resolve_bytes(mp_report_file, "Warehouse", "mp_report", bulk_zip_map) \
-            if mp_report_file else bulk_zip_map.get(("Warehouse", "mp_report"))
-        if mp_report_bytes and name_lookup:
-            mp_df = parse_mp_report(mp_report_bytes, mp_report_file.name if mp_report_file else "mp_report.xlsx")
-            if mp_df.empty:
-                st.warning("MP Report file found but no SKU column could be detected — skipping.")
-            else:
-                mp_vs_pm_df = build_mp_vs_product_master_df(mp_df, name_lookup)
-        elif mp_report_bytes and not name_lookup:
-            st.warning("MP Report file found, but Product Master is needed to compare against — skipping.")
+        dl_cols2 = st.columns(2)
 
-        pairs_to_check = [
-            ("Lazada", bool(lazada_mp_bytes), bool(lazada_inv_bytes)),
-            ("Shopee", bool(shopee_mp_bytes), bool(shopee_inv_bytes)),
-            ("Zalora", bool(zalora_mp_bytes), bool(zalora_inv_bytes)),
-            ("Shopify", bool(shopify_mp_bytes), bool(shopify_inv_bytes)),
-        ]
-        missing_pairs = []
-        for name, mp_ok, inv_ok in pairs_to_check:
-            if mp_ok and not inv_ok:
-                missing_pairs.append(f"{name} MP file found without its inventory file")
-            if inv_ok and not mp_ok:
-                missing_pairs.append(f"{name} inventory file found without its MP file")
-        if missing_pairs:
-            st.warning("Skipped incomplete pairs: " + "; ".join(missing_pairs))
+        with dl_cols2[0]:
+            with st.container(border=True):
+                st.markdown("##### 📊 Summary Report")
+                st.caption("Just the KPI summary blocks per marketplace, no row-level detail.")
+                summary_bytes = workbook_to_bytes(
+                    build_summary_only_workbook(marketplace_data, warehouse_vs_soh_df, report_brand))
+                st.download_button(
+                    "Download",
+                    data=summary_bytes,
+                    file_name=f"Summary_Report_{stamp}.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    use_container_width=True,
+                    key="dl_summary",
+                )
 
-        if (not marketplace_data and warehouse_df is None and mp_vs_pm_df is None
-                and warehouse_vs_soh_df is None and missing_pm_df is None):
-            st.error(
-                "No complete pair was found. Each marketplace needs BOTH its "
-                "MP file AND its inventory file uploaded (DTC needs the SOH warehouse file; "
-                "MP Report needs Product Master; Warehouse report needs SOH)."
-            )
-        else:
-            wb = build_workbook(marketplace_data, warehouse_df, brand_name, mp_vs_pm_df, warehouse_vs_soh_df, missing_pm_df)
-            buf = io.BytesIO()
-            wb.save(buf)
-            buf.seek(0)
+        with dl_cols2[1]:
+            with st.container(border=True):
+                st.markdown("##### 📋 Product Master Missing Report")
+                st.caption("SKUs from SOH / DTC / Warehouse that weren't found in the Product Master.")
+                pm_missing_bytes = workbook_to_bytes(build_missing_pm_workbook(missing_pm_df))
+                st.download_button(
+                    "Download",
+                    data=pm_missing_bytes,
+                    file_name=f"Product_Master_Missing_{stamp}.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    use_container_width=True,
+                    key="dl_pm_missing",
+                )
 
-            suffix = "Multi" if len(marketplace_data) > 1 else (list(marketplace_data)[0] if marketplace_data else "Report")
-            filename = f"Stock_Validation_{suffix}_{datetime.now().strftime('%Y%m%d')}.xlsx"
 
-            st.success("Validation complete!")
-            metric_items = list(marketplace_data.items())
-            if mp_vs_pm_df is not None:
-                metric_items.append(("MP vs PM", mp_vs_pm_df))
-            if warehouse_vs_soh_df is not None:
-                metric_items.append(("Warehouse vs SOH", warehouse_vs_soh_df))
-            if metric_items:
-                cols = st.columns(len(metric_items))
-                for i, (mp, df) in enumerate(metric_items):
-                    with cols[i]:
-                        mismatches = (df["Status"] == "Mismatch").sum()
-                        st.metric(f"{mp} mismatches", int(mismatches), delta=None)
+# ----------------------------------------------------------------------------
+# Tab 3 — Saved Reports
+# ----------------------------------------------------------------------------
+with tab_saved:
+    st.markdown("#### All Saved Reports")
+    st.caption("Reports are saved to the server and remain available. You can download any previous report here.")
 
-            st.download_button(
-                "⬇️ Download Excel Report",
-                data=buf,
-                file_name=filename,
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            )
-else:
-    st.info("Upload each marketplace's MP file + inventory file into the matching card above to begin.")
+    if os.path.isdir(REPORTS_DIR):
+        saved_files = sorted(
+            [f for f in os.listdir(REPORTS_DIR) if f.lower().endswith(".xlsx")],
+            reverse=True,
+        )
+    else:
+        saved_files = []
+
+    if not saved_files:
+        st.info("No saved reports yet. Run validation to generate one.")
+    else:
+        for fname in saved_files:
+            fpath = os.path.join(REPORTS_DIR, fname)
+            with st.container(border=True):
+                cols = st.columns([4, 1])
+                with cols[0]:
+                    st.markdown(f"**{fname}**")
+                    mtime = datetime.fromtimestamp(os.path.getmtime(fpath)).strftime("%d %b %Y, %H:%M")
+                    st.caption(f"Saved {mtime}")
+                with cols[1]:
+                    with open(fpath, "rb") as f:
+                        st.download_button(
+                            "Download",
+                            data=f.read(),
+                            file_name=fname,
+                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                            use_container_width=True,
+                            key=f"dl_saved_{fname}",
+                        )
