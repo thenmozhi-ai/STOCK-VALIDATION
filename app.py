@@ -904,16 +904,6 @@ brand_name = st.text_input("Brand / Shop name (shown on the summary tab)", value
 st.markdown("### 1️⃣ Marketplace pairs")
 st.caption("Each marketplace needs BOTH its MP file and its inventory (StockValidation) file to run.")
 
-with st.container(border=True):
-    st.markdown(
-        '<div class="mp-card-header" style="background:#1F3864;">📦 Or upload one ZIP with everything</div>',
-        unsafe_allow_html=True,
-    )
-    bulk_zip_file = st.file_uploader(
-        "ZIP file containing any combination of the reports below "
-        "(MP files, inventory/StockValidation CSVs, SOH, Product Master, etc.)",
-        type=["zip"], key="bulk_zip",
-    )
     st.caption(
         "Files are auto-detected by filename, same as if uploaded individually. "
         "You can also upload a ZIP into any single slot below instead of picking one file out of it."
