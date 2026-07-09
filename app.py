@@ -398,6 +398,42 @@ def build_marketplace_df(stockval_df: pd.DataFrame, sp_lookup: dict, marketplace
     return df
 
 
+def filter_dict_by_product_master(sku_qty: dict, source_label: str, name_lookup: dict):
+    """Split a {sku: qty} lookup into (matched_dict, missing_rows).
+    matched_dict keeps only SKUs found in the Product Master; SKUs not found
+    are skipped from matched_dict and instead returned as missing_rows
+    (list of dicts) for the 'Missing in Product Master' report.
+    If no Product Master was provided, everything passes through unfiltered."""
+    if not name_lookup:
+        return sku_qty, []
+    pm_skus = set(name_lookup.keys())
+    matched, missing_rows = {}, []
+    for sku, qty in sku_qty.items():
+        if sku in pm_skus:
+            matched[sku] = qty
+        else:
+            missing_rows.append({"Seller SKU": sku, "Quantity": qty, "Source": source_label})
+    return matched, missing_rows
+
+
+def filter_df_by_product_master(df: pd.DataFrame, source_label: str, name_lookup: dict,
+                                 sku_col="Seller SKU", qty_col="Expected Stock"):
+    """Same idea as filter_dict_by_product_master but for a dataframe (e.g. a
+    StockValidation-style inventory file). Returns (matched_df, missing_rows_df)."""
+    if not name_lookup:
+        return df, pd.DataFrame(columns=["Seller SKU", "Quantity", "Source"])
+    pm_skus = set(name_lookup.keys())
+    mask = df[sku_col].isin(pm_skus)
+    matched_df = df[mask].copy()
+    missing_df = df[~mask].copy()
+    missing_rows = pd.DataFrame({
+        "Seller SKU": missing_df[sku_col].values,
+        "Quantity": missing_df[qty_col].values if qty_col in missing_df.columns else None,
+        "Source": source_label,
+    })
+    return matched_df, missing_rows
+
+
 # ----------------------------------------------------------------------------
 # Excel writer
 # ----------------------------------------------------------------------------
@@ -513,7 +549,8 @@ def compute_counts(df, not_found_label, match_label="TRUE"):
 
 
 def build_workbook(marketplace_data: dict, warehouse_df: pd.DataFrame = None, brand_name="Shop",
-                    mp_vs_pm_df: pd.DataFrame = None, warehouse_vs_soh_df: pd.DataFrame = None):
+                    mp_vs_pm_df: pd.DataFrame = None, warehouse_vs_soh_df: pd.DataFrame = None,
+                    missing_pm_df: pd.DataFrame = None):
     wb = Workbook()
     wb.remove(wb.active)
     summary_ws = wb.create_sheet("Summary")
@@ -559,6 +596,29 @@ def build_workbook(marketplace_data: dict, warehouse_df: pd.DataFrame = None, br
         write_df_sheet(wb, "Warehouse vs SOH", warehouse_vs_soh_df)
         mism_df = warehouse_vs_soh_df[warehouse_vs_soh_df["Status"] == "Mismatch"]
         write_df_sheet(wb, "Warehouse vs SOH Mismatches", mism_df)
+
+    if missing_pm_df is not None and not missing_pm_df.empty:
+        fill = PatternFill("solid", fgColor=NAVY)
+        summary_ws.cell(row=row_cursor, column=1, value="MISSING IN PRODUCT MASTER (skipped from validation)").font = \
+            Font(name="Arial", size=12, bold=True, color="FFFFFF")
+        summary_ws.cell(row=row_cursor, column=1).fill = fill
+        for c in range(2, 7):
+            summary_ws.cell(row=row_cursor, column=c).fill = fill
+
+        by_source = missing_pm_df.groupby("Source").size()
+        r = row_cursor + 1
+        summary_ws.cell(row=r, column=1, value="Total Missing").font = Font(name="Arial", size=10, bold=True)
+        cell = summary_ws.cell(row=r + 1, column=1, value=int(len(missing_pm_df)))
+        cell.font = Font(name="Arial", size=11, bold=True)
+        cell.fill = PatternFill("solid", fgColor=GREY_FILL)
+        for i, (src, cnt) in enumerate(by_source.items(), start=2):
+            summary_ws.cell(row=r, column=i, value=src).font = Font(name="Arial", size=10, bold=True)
+            c2 = summary_ws.cell(row=r + 1, column=i, value=int(cnt))
+            c2.font = Font(name="Arial", size=11, bold=True)
+            c2.fill = PatternFill("solid", fgColor=GREY_FILL)
+        row_cursor = r + 4
+
+        write_df_sheet(wb, "Missing in Product Master", missing_pm_df)
 
     return wb
 
@@ -609,6 +669,46 @@ def apply_product_master_check(df: pd.DataFrame, name_lookup: dict) -> pd.DataFr
     insert_at = cols.index("Product Name") + 1 if "Product Name" in cols else cols.index("Seller SKU") + 1
     cols.insert(insert_at, "In Product Master")
     return df[cols]
+
+
+# ----------------------------------------------------------------------------
+# Product Master gating — run BEFORE stock validation.
+# Every source file (marketplace inventory files, SOH, DTC, Warehouse report)
+# gets its SKUs checked against the Product Master first. Unmatched SKUs are
+# collected into a single "Missing in Product Master" report and dropped from
+# that file's data — matched SKUs continue on to stock validation as normal.
+# If no Product Master was uploaded, gating is a no-op (nothing is filtered).
+# ----------------------------------------------------------------------------
+def gate_df_by_product_master(df: pd.DataFrame, pm_sku_set: set, source_label: str):
+    """Split a dataframe with a 'Seller SKU' column into (matched_df, missing_rows).
+    missing_rows is a list of dicts ready to feed the combined Missing-in-PM report."""
+    if not pm_sku_set or df.empty or "Seller SKU" not in df.columns:
+        return df, []
+    is_matched = df["Seller SKU"].isin(pm_sku_set)
+    matched_df = df[is_matched].reset_index(drop=True)
+    missing_df = df[~is_matched]
+    missing_rows = [
+        {
+            "Source": source_label,
+            "Seller SKU": row["Seller SKU"],
+            "Expected Stock": row["Expected Stock"] if "Expected Stock" in df.columns else None,
+        }
+        for _, row in missing_df.iterrows()
+    ]
+    return matched_df, missing_rows
+
+
+def gate_lookup_by_product_master(lookup: dict, pm_sku_set: set, source_label: str):
+    """Same idea as gate_df_by_product_master, but for the SKU->quantity dict
+    lookups used by SOH / Warehouse report (which aren't dataframes)."""
+    if not pm_sku_set or not lookup:
+        return lookup, []
+    matched = {sku: qty for sku, qty in lookup.items() if sku in pm_sku_set}
+    missing_rows = [
+        {"Source": source_label, "Seller SKU": sku, "Expected Stock": qty}
+        for sku, qty in lookup.items() if sku not in pm_sku_set
+    ]
+    return matched, missing_rows
 
 
 def parse_mp_report(file_bytes: bytes, filename: str) -> pd.DataFrame:
@@ -797,10 +897,10 @@ with row1[2]:
     with st.container(border=True):
         mp_card_header("TikTok")
         tiktok_mp_file = st.file_uploader(
-            "TikTok Stock Report (Tiktoksellercenter_batchedit...xlsx)",
+            "TikTok Batch Edit Report (Tiktoksellercenter_batchedit...xlsx)",
             type=["xlsx", "zip"], key="tiktok_mp")
         tiktok_status_file = st.file_uploader(
-            "TikTok Active/Inactive Report (optional)",
+            "TikTok Active/Inactive MP Report (optional)",
             type=["xlsx", "zip"], key="tiktok_status")
         if not tiktok_status_file and ("TikTok", "status_file") in bulk_zip_map:
             st.caption("✅ TikTok Active/Inactive report found in the bulk ZIP.")
@@ -858,7 +958,8 @@ with st.expander("ℹ️ Notes on file formats", expanded=False):
         """
 - **Lazada MP file** — the `pricestock...xlsx` Stock & Price export
 - **Shopee MP file** — the `mass_update_sales_info...xlsx` export
-- **Tiktok MP file** — the `Tiktoksellercenter_batchedit...xlsx` export
+- **TikTok Batch Edit Report** — the `Tiktoksellercenter_batchedit...xlsx` export
+- **TikTok Active/Inactive MP Report** — optional; listing status per SKU, adds a `TikTok_Status` column
 - **Zalora MP file** — `SellerStockTemplate...xlsx`; optional Status file adds an active/inactive column
 - **Shopify MP file** — the standard Shopify "Export inventory" CSV (`SKU` + `Available` columns)
 - **DTC inventory file** — StockValidation-style CSV for your own DTC site; validated against the
@@ -951,14 +1052,24 @@ if any_uploaded:
             df = build_marketplace_df(stockval_df, shopify_sp_lookup, "Shopify")
             marketplace_data["Shopify"] = apply_product_names(df, name_lookup)
 
+        missing_pm_rows = []  # collects rows skipped from SOH / DTC / Warehouse for the Missing-in-PM report
+
         soh_lookup = None
         soh_bytes = resolve_bytes(soh_file, "Warehouse", "soh", bulk_zip_map) if soh_file else bulk_zip_map.get(("Warehouse", "soh"))
         if soh_bytes:
-            soh_lookup = parse_soh(soh_bytes)
+            raw_soh_lookup = parse_soh(soh_bytes)
+            soh_lookup, soh_missing = filter_dict_by_product_master(raw_soh_lookup, "SOH Report", name_lookup)
+            missing_pm_rows.extend(soh_missing)
+            if soh_missing and name_lookup:
+                st.info(f"SOH Report: {len(soh_missing)} SKU(s) not found in Product Master — skipped from validation.")
 
         dtc_inv_bytes = resolve_bytes(dtc_inv_file, "DTC", "stock_validation", bulk_zip_map)
         if dtc_inv_bytes and soh_lookup:
-            stockval_df = parse_stock_validation_csv(dtc_inv_bytes)
+            raw_stockval_df = parse_stock_validation_csv(dtc_inv_bytes)
+            stockval_df, dtc_missing_df = filter_df_by_product_master(raw_stockval_df, "DTC Inventory Report", name_lookup)
+            if not dtc_missing_df.empty:
+                missing_pm_rows.extend(dtc_missing_df.to_dict("records"))
+                st.info(f"DTC Inventory Report: {len(dtc_missing_df)} SKU(s) not found in Product Master — skipped from validation.")
             df = build_marketplace_df(stockval_df, soh_lookup, "DTC")
             marketplace_data["DTC"] = apply_product_master_check(df, name_lookup)
         elif dtc_inv_bytes and not soh_lookup:
@@ -969,10 +1080,14 @@ if any_uploaded:
         wh_report_bytes = resolve_bytes(warehouse_report_file, "Warehouse", "all_report", bulk_zip_map) \
             if warehouse_report_file else bulk_zip_map.get(("Warehouse", "all_report"))
         if wh_report_bytes and soh_lookup:
-            wh_lookup = parse_warehouse_report(wh_report_bytes, warehouse_report_file.name if warehouse_report_file else "warehouse.csv")
-            if not wh_lookup:
+            raw_wh_lookup = parse_warehouse_report(wh_report_bytes, warehouse_report_file.name if warehouse_report_file else "warehouse.csv")
+            if not raw_wh_lookup:
                 st.warning("Warehouse report found but no SKU/quantity columns could be detected — skipping.")
             else:
+                wh_lookup, wh_missing = filter_dict_by_product_master(raw_wh_lookup, "Warehouse Report", name_lookup)
+                if wh_missing:
+                    missing_pm_rows.extend(wh_missing)
+                    st.info(f"Warehouse Report: {len(wh_missing)} SKU(s) not found in Product Master — skipped from validation.")
                 warehouse_vs_soh_df = apply_product_master_check(build_warehouse_vs_soh_df(wh_lookup, soh_lookup), name_lookup)
         elif wh_report_bytes and not soh_lookup:
             st.warning("Warehouse report found, but SOH is needed to compare against — skipping.")
@@ -988,6 +1103,11 @@ if any_uploaded:
                     "SOH file loaded without a Warehouse report — showing warehouse stock as reference only "
                     "(no comparison available for this tab)."
                 )
+
+        missing_pm_df = pd.DataFrame(missing_pm_rows) if missing_pm_rows else None
+        if missing_pm_rows and not name_lookup:
+            # Shouldn't happen (filtering only triggers when name_lookup exists) but guard just in case.
+            missing_pm_df = None
 
         mp_vs_pm_df = None
         mp_report_bytes = resolve_bytes(mp_report_file, "Warehouse", "mp_report", bulk_zip_map) \
@@ -1018,14 +1138,14 @@ if any_uploaded:
             st.warning("Skipped incomplete pairs: " + "; ".join(missing_pairs))
 
         if (not marketplace_data and warehouse_df is None and mp_vs_pm_df is None
-                and warehouse_vs_soh_df is None):
+                and warehouse_vs_soh_df is None and missing_pm_df is None):
             st.error(
                 "No complete pair was found. Each marketplace needs BOTH its "
                 "MP file AND its inventory file uploaded (DTC needs the SOH warehouse file; "
                 "MP Report needs Product Master; Warehouse report needs SOH)."
             )
         else:
-            wb = build_workbook(marketplace_data, warehouse_df, brand_name, mp_vs_pm_df, warehouse_vs_soh_df)
+            wb = build_workbook(marketplace_data, warehouse_df, brand_name, mp_vs_pm_df, warehouse_vs_soh_df, missing_pm_df)
             buf = io.BytesIO()
             wb.save(buf)
             buf.seek(0)
