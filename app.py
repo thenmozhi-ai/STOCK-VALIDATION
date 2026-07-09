@@ -37,6 +37,7 @@ ORANGE_FILL, ORANGE_FONT = "FFEB9C", "7D4800"
 GREY_FILL, GREY_FONT = "D9D9D9", "595959"
 ALT_ROW_FILL = "F2F7FB"
 THIN_GREY = Side(style="thin", color="BFBFBF")
+BLUE_FILL, BLUE_FONT = "BDD7EE", "1F4E78"
 
 NOT_FOUND_LABELS = {
     "Lazada": "NOT IN LAZADA",
@@ -46,6 +47,11 @@ NOT_FOUND_LABELS = {
     "Shopify": "NOT IN SHOPIFY",
     "DTC": "NOT IN WAREHOUSE",
 }
+# NOT_FOUND_LABELS = "Missing in Marketplace Report" (SKU is in the Stock
+# Validation file but wasn't found in the marketplace's own stock report).
+# This is the mirror image: SKU exists in the marketplace report but was
+# never in the Stock Validation file to begin with.
+MISSING_IN_VALIDATION_LABEL = "MISSING IN VALIDATION FILE"
 
 MARKETPLACE_ORDER = ["Lazada", "Shopee", "TikTok", "Zalora", "Shopify", "DTC"]
 
@@ -396,6 +402,41 @@ def build_marketplace_df(stockval_df: pd.DataFrame, sp_lookup: dict, marketplace
     return df
 
 
+def append_extra_mp_only_skus(df: pd.DataFrame, sp_lookup: dict, status_lookup: dict = None) -> pd.DataFrame:
+    """Find SKUs present in the marketplace report (sp_lookup) but absent from
+    the Stock Validation file's 'Seller SKU' column, and append them as extra
+    rows tagged MISSING_IN_VALIDATION_LABEL. Without this, those SKUs are
+    silently dropped — build_marketplace_df only ever iterates the Stock
+    Validation file's rows, so a SKU that only exists on the marketplace side
+    never gets a row at all."""
+    if not sp_lookup or "Seller SKU" not in df.columns:
+        return df
+    existing_skus = set(df["Seller SKU"])
+    extra_skus = [sku for sku in sp_lookup if sku not in existing_skus]
+    if not extra_skus:
+        return df
+
+    extra_rows = []
+    for sku in extra_skus:
+        row = {col: None for col in df.columns}
+        row["Seller SKU"] = sku
+        if "SP_Quantity" in df.columns:
+            row["SP_Quantity"] = sp_lookup[sku]
+        if "Status" in df.columns:
+            row["Status"] = "Mismatch"
+        if "Remark" in df.columns:
+            row["Remark"] = MISSING_IN_VALIDATION_LABEL
+        if status_lookup:
+            if "Zalora_Status" in df.columns:
+                row["Zalora_Status"] = status_lookup.get(sku, "—")
+            if "TikTok_Status" in df.columns:
+                row["TikTok_Status"] = status_lookup.get(sku, "—")
+        extra_rows.append(row)
+
+    extra_df = pd.DataFrame(extra_rows, columns=df.columns)
+    return pd.concat([df, extra_df], ignore_index=True)
+
+
 def filter_dict_by_product_master(sku_qty: dict, source_label: str, name_lookup: dict):
     """Split a {sku: qty} lookup into (matched_dict, missing_rows).
     matched_dict keeps only SKUs found in the Product Master; SKUs not found
@@ -468,6 +509,7 @@ def write_df_sheet(wb, sheet_name, df, remark_col="Remark", status_col="Status")
     }
     for label in NOT_FOUND_LABELS.values():
         color_map[label] = (GREY_FILL, GREY_FONT)
+    color_map[MISSING_IN_VALIDATION_LABEL] = (BLUE_FILL, BLUE_FONT)
 
     for r_i, row in enumerate(df.itertuples(index=False), start=2):
         for c_i, value in enumerate(row, start=1):
@@ -512,15 +554,15 @@ def add_summary_block(ws, start_row, title, counts, labels=None):
     fill = PatternFill("solid", fgColor=NAVY)
     ws.cell(row=start_row, column=1, value=title).font = Font(name="Arial", size=12, bold=True, color="FFFFFF")
     ws.cell(row=start_row, column=1).fill = fill
-    for c in range(2, 7):
+    for c in range(2, 8):
         ws.cell(row=start_row, column=c).fill = fill
 
-    labels = labels or ["Total", "TRUE", "IMPACT", "UPDATE 0", "NOT FOUND", "Total Mismatches"]
+    labels = labels or ["Total", "TRUE", "IMPACT", "UPDATE 0", "NOT FOUND", "Total Mismatches", "MISSING IN VAL FILE"]
     colors = [None, (GREEN_FILL, GREEN_FONT), (RED_FILL, RED_FONT), (ORANGE_FILL, ORANGE_FONT),
-              (GREY_FILL, GREY_FONT), (RED_FILL, RED_FONT)]
+              (GREY_FILL, GREY_FONT), (RED_FILL, RED_FONT), (BLUE_FILL, BLUE_FONT)]
     values = [
         counts["total"], counts["true"], counts["impact"],
-        counts["update0"], counts["not_found"], counts["mismatches"],
+        counts["update0"], counts["not_found"], counts["mismatches"], counts.get("missing_val", 0),
     ]
     for i, (label, val, color) in enumerate(zip(labels, values, colors)):
         r = start_row + 1
@@ -535,15 +577,16 @@ def add_summary_block(ws, start_row, title, counts, labels=None):
     return start_row + 4
 
 
-def compute_counts(df, not_found_label, match_label="TRUE"):
+def compute_counts(df, not_found_label, match_label="TRUE", missing_val_label=MISSING_IN_VALIDATION_LABEL):
     total = len(df)
     true_ct = (df["Remark"] == match_label).sum()
     impact_ct = (df["Remark"] == "IMPACT").sum()
     update0_ct = (df["Remark"] == "UPDATE 0").sum()
     nf_ct = (df["Remark"] == not_found_label).sum()
+    mv_ct = (df["Remark"] == missing_val_label).sum() if missing_val_label else 0
     mismatches = (df["Status"] == "Mismatch").sum()
     return dict(total=total, true=true_ct, impact=impact_ct, update0=update0_ct,
-                not_found=nf_ct, mismatches=mismatches)
+                not_found=nf_ct, missing_val=mv_ct, mismatches=mismatches)
 
 
 def build_workbook(marketplace_data: dict, warehouse_df: pd.DataFrame = None, brand_name="Shop",
@@ -553,7 +596,7 @@ def build_workbook(marketplace_data: dict, warehouse_df: pd.DataFrame = None, br
     wb.remove(wb.active)
     summary_ws = wb.create_sheet("Summary")
     summary_ws.column_dimensions["A"].width = 20
-    for col in "BCDEF":
+    for col in "BCDEFG":
         summary_ws.column_dimensions[col].width = 16
 
     summary_ws.cell(row=1, column=1,
@@ -861,27 +904,10 @@ brand_name = st.text_input("Brand / Shop name (shown on the summary tab)", value
 st.markdown("### 1️⃣ Marketplace pairs")
 st.caption("Each marketplace needs BOTH its MP file and its inventory (StockValidation) file to run.")
 
-with st.container(border=True):
-    st.markdown(
-        '<div class="mp-card-header" style="background:#1F3864;">📦 Or upload one ZIP with everything</div>',
-        unsafe_allow_html=True,
-    )
-    bulk_zip_file = st.file_uploader(
-        "ZIP file containing any combination of the reports below "
-        "(MP files, inventory/StockValidation CSVs, SOH, Product Master, etc.)",
-        type=["zip"], key="bulk_zip",
-    )
-    st.caption(
-        "Files are auto-detected by filename, same as if uploaded individually. "
-        "You can also upload a ZIP into any single slot below instead of picking one file out of it."
-    )
-
-bulk_zip_map = extract_zip_map(bulk_zip_file.read()) if bulk_zip_file else {}
-if bulk_zip_file and not bulk_zip_map:
-    st.warning("ZIP uploaded, but no recognizable report filenames were found inside it.")
-elif bulk_zip_map:
-    st.success(f"ZIP loaded — {len(bulk_zip_map)} recognizable file(s) found: "
-               + ", ".join(f"{mp} ({role})" for mp, role in bulk_zip_map.keys()))
+# No global bulk-ZIP upload — each slot below still accepts a ZIP individually
+# (resolve_bytes/slot_present will extract + classify it), this dict just
+# means there's no shared cross-slot ZIP to fall back to.
+bulk_zip_map = {}
 
 row1 = st.columns(3)
 row2 = st.columns(2)
@@ -1022,6 +1048,7 @@ if any_uploaded:
             stockval_df = parse_stock_validation_csv(lazada_inv_bytes)
             sp_lookup = parse_lazada_stock_price(lazada_mp_bytes)
             df = build_marketplace_df(stockval_df, sp_lookup, "Lazada")
+            df = append_extra_mp_only_skus(df, sp_lookup)
             marketplace_data["Lazada"] = apply_product_names(df, name_lookup)
 
         shopee_inv_bytes = resolve_bytes(tc_shopee_inv_file, "Shopee", "stock_validation", bulk_zip_map)
@@ -1030,6 +1057,7 @@ if any_uploaded:
             stockval_df = parse_stock_validation_csv(shopee_inv_bytes)
             sp_lookup = parse_shopee_mass_update(shopee_mp_bytes)
             df = build_marketplace_df(stockval_df, sp_lookup, "Shopee")
+            df = append_extra_mp_only_skus(df, sp_lookup)
             marketplace_data["Shopee"] = apply_product_names(df, name_lookup)
 
         tiktok_inv_bytes = resolve_bytes(tiktok_inv_file, "TikTok", "stock_validation", bulk_zip_map)
@@ -1051,6 +1079,7 @@ if any_uploaded:
             tiktok_status_lookup = build_tiktok_status_lookup(active_lookup, inactive_lookup)
 
             df = build_marketplace_df(stockval_df, sp_lookup, "TikTok", tiktok_status_lookup)
+            df = append_extra_mp_only_skus(df, sp_lookup, tiktok_status_lookup)
             marketplace_data["TikTok"] = apply_product_names(df, name_lookup)
         elif tiktok_inv_bytes or tiktok_active_bytes or tiktok_inactive_bytes:
             missing = []
@@ -1070,6 +1099,7 @@ if any_uploaded:
             zalora_status_bytes = resolve_bytes(zalora_status_file, "Zalora", "status_file", bulk_zip_map)
             status_lookup = parse_zalora_status_file(zalora_status_bytes) if zalora_status_bytes else None
             df = build_marketplace_df(stockval_df, sp_lookup, "Zalora", status_lookup)
+            df = append_extra_mp_only_skus(df, sp_lookup, status_lookup)
             marketplace_data["Zalora"] = apply_product_names(df, name_lookup)
 
         shopify_sp_lookup = None
@@ -1085,6 +1115,7 @@ if any_uploaded:
         if shopify_inv_bytes and shopify_sp_lookup:
             stockval_df = parse_stock_validation_csv(shopify_inv_bytes)
             df = build_marketplace_df(stockval_df, shopify_sp_lookup, "Shopify")
+            df = append_extra_mp_only_skus(df, shopify_sp_lookup)
             marketplace_data["Shopify"] = apply_product_names(df, name_lookup)
 
         missing_pm_rows = []  # collects rows skipped from SOH / DTC / Warehouse for the Missing-in-PM report
@@ -1106,6 +1137,7 @@ if any_uploaded:
                 missing_pm_rows.extend(dtc_missing_df.to_dict("records"))
                 st.info(f"DTC Inventory Report: {len(dtc_missing_df)} SKU(s) not found in Product Master — skipped from validation.")
             df = build_marketplace_df(stockval_df, soh_lookup, "DTC")
+            df = append_extra_mp_only_skus(df, soh_lookup)
             marketplace_data["DTC"] = apply_product_master_check(df, name_lookup)
         elif dtc_inv_bytes and not soh_lookup:
             st.warning("DTC inventory file found, but the SOH warehouse file is needed to validate against — skipping DTC.")
